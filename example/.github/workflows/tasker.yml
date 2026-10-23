@@ -1,0 +1,37 @@
+# Rebuild the dashboard on every change to the items, and once a day so check dates come due.
+name: Tasker
+on:
+  push:
+    branches: [main]
+    paths: [projects/**, projects.yaml, tasker.yaml]
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # commit TASKER.md
+  pages: write
+  id-token: write
+
+concurrency:
+  group: tasker
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history: "updated" dates and "done in the last 7 days"
+      - uses: xlysoft85/tasker-app@v1
+        with:
+          timezone: Europe/London   # decides when a check date is "today"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4

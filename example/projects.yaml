@@ -1,0 +1,25 @@
+# Registry of projects. Items live in projects/<id>.md.
+# area:   one of the areas in tasker.yaml
+# status: active | paused | done   (done → delete projects/<id>.md)
+
+- id: WEB
+  name: Website relaunch
+  area: work
+  status: active
+  docs: [handbook/web/relaunch.md]
+
+- id: ONB
+  name: New-hire onboarding
+  area: work
+  status: active
+  docs: [handbook/people/onboarding.md]
+
+- id: MOVE
+  name: Flat move
+  area: personal
+  status: active
+
+- id: BLOG
+  name: Personal blog
+  area: side
+  status: paused

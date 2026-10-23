@@ -1,0 +1,9 @@
+# Tasker settings. Every key is optional. Format and rules: README.md of tasker-app.
+title: Tasker
+areas: [work, personal, side]          # order sets the chip colours; omit to accept any area
+source: {name: you/my-tasker, url: https://github.com/you/my-tasker}   # header link
+schedule: rebuilds on every push and daily   # shown in the header
+refresh_minutes: 15                    # page auto-reload; 0 = off
+repos:                                 # doc:<repo>/<path> becomes a link
+  my-tasker: https://github.com/you/my-tasker
+  handbook: {url: https://github.com/you/handbook, branch: main}
