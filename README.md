@@ -14,12 +14,14 @@ what you can act on, what you're waiting on and since when, and which check date
 It also flags waiting items whose blockers are finished, and lists what you finished this week,
 read from git history.
 
-**[Live demo →](https://xlysoft85.github.io/tasker-app/)** (built from [`example/`](example/))
+**[Live demo →](https://xlysoft85.github.io/tasker-app/)** (built from [`example/`](example/); the
+*Done* list comes from [`demo/done.txt`](demo/done.txt))
 
 ## Why plain text
 
 - **Agents can maintain it.** Claude Code or any coding agent with a checkout updates an item in the
-  same session that did the work, with no API, MCP server or extra tool. See [docs/agents.md](docs/agents.md).
+  same session that did the work, with no API, MCP server or extra tool. Setup for Claude Code
+  (skill, session-start hook, permissions): [docs/claude-code.md](docs/claude-code.md). Other agents: [docs/agents.md](docs/agents.md).
 - **Git is the history.** A finished item is a deleted line, and `git log -p` shows when and why.
 - **Nothing to host.** The dashboard is one static HTML file. Put it on GitHub Pages, serve it from
   any box, or just read `TASKER.md` on GitHub.
@@ -116,7 +118,7 @@ git clone --branch v1.0.0 https://github.com/xlysoft85/tasker-app /opt/tasker
 
 Issues and pull requests are welcome. Tasker is deliberately one file with one dependency, so please
 keep it that way. Preview a change against the example with
-`python3 tasker.py --repo example --site /tmp/site --no-git --today 2026-11-02`.
+`demo/history.sh /tmp/demo 2026-11-02 && python3 tasker.py --repo /tmp/demo --site /tmp/site --no-git --today 2026-11-02`.
 
 ## Licence
 

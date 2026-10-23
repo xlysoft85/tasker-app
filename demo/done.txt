@@ -1,0 +1,10 @@
+# Items the demo shows as finished: <days before the demo date> <item line>.
+# demo/history.sh adds them to example/ and deletes each in a commit dated that many days back.
+0 - WEB-2 #next Brief the design agency on header photos — mood board and three reference sites
+1 - ONB-4 #waiting Accounts for Sam (email, Slack, GitHub) · on:IT
+1 - PLAN-2 #next Collect last quarter's numbers from finance
+2 - MOVE-4 #waiting Quote from the moving company · on:Movers Ltd · check:2026-10-30
+3 - CAR-1 #next Book the winter tyre change
+4 - VEND-1 #watch Design tool seats cut from 12 to 8 — check nobody lost access · check:2026-10-29
+5 - TALK-1 #next Submit the talk abstract — deadline 31 October
+6 - WEB-7 #next Pick the staging hosting plan

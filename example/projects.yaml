@@ -14,9 +14,30 @@
   status: active
   docs: [handbook/people/onboarding.md]
 
+- id: PLAN
+  name: Q1 planning
+  area: work
+  status: active
+  docs: [handbook/planning/q1.md]
+
+- id: VEND
+  name: Tool renewals
+  area: work
+  status: active
+
 - id: MOVE
   name: Flat move
   area: personal
+  status: active
+
+- id: CAR
+  name: Car
+  area: personal
+  status: active
+
+- id: TALK
+  name: Conference talk
+  area: side
   status: active
 
 - id: BLOG

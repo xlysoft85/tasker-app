@@ -24,9 +24,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - run: demo/history.sh _demo 2026-11-02   # example/ plus a week of finished items
       - uses: ./
         with:
-          repo: example
+          repo: _demo
           push: "false"
           today: "2026-11-02"   # the example dates are written around this day
       - uses: actions/upload-pages-artifact@v3

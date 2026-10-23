@@ -165,9 +165,11 @@ def load(repo):
     return projects, seen, problems
 
 
-def recently_done(repo, current_ids, days=7):
-    out = git(repo, "log", f"--since={days}.days", "-p", "--format=@@C %as", "--",
-              "projects/", check=False)
+def recently_done(repo, current_ids, today, days=7):
+    """Items deleted in the `days` days up to and including `today`."""
+    since = today - dt.timedelta(days=days - 1)
+    out = git(repo, "log", f"--since={since} 00:00", f"--until={today} 23:59:59", "-p",
+              "--format=@@C %as", "--", "projects/", check=False)
     done, date = {}, None
     for line in out.splitlines():
         if line.startswith("@@C "):
@@ -396,7 +398,7 @@ def main():
     projects, items, problems = load(repo)
     problems = cfg_problems + problems
     annotate(projects, items, today)
-    done = recently_done(repo, items)
+    done = recently_done(repo, items, today)
 
     write_atomic(Path(a.site) / "index.html",
                  render_html(projects, items, problems, done, today, generated, pull_error))
