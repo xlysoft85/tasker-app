@@ -50,6 +50,8 @@ def load_config(repo):
     return {"title": str(raw.get("title") or "Tasker"), "areas": areas, "repos": repos,
             "source": source, "schedule": str(raw.get("schedule") or ""),
             "refresh": int(raw.get("refresh_minutes", 15) or 0),
+            "stale": int(raw.get("stale_minutes", 0) or 0),
+            "focus": str(raw.get("focus") or "FOCUS.md"),
             "commit": raw.get("commit") or {}}, problems
 
 
@@ -65,8 +67,9 @@ def area_list(projects):
 
 
 def git(repo, *args, check=True):
-    return subprocess.run(["git", "-C", str(repo), *args], check=check,
-                          capture_output=True, text=True).stdout
+    # errors="replace": one commit with a non-UTF-8 byte must not stop the build.
+    return subprocess.run(["git", "-C", str(repo), *args], check=check, capture_output=True,
+                          text=True, encoding="utf-8", errors="replace").stdout
 
 
 def parse_date(s, problems, where):
@@ -165,9 +168,12 @@ def load(repo):
     return projects, seen, problems
 
 
-def recently_done(repo, current_ids, today, days=7):
-    """Items deleted in the `days` days up to and including `today`."""
-    since = today - dt.timedelta(days=days - 1)
+WEEKS = 4  # closed-per-week chart: this week and the three before
+
+
+def closed_items(repo, current_ids, today):
+    """(date, id, title) of items deleted since the Monday WEEKS-1 weeks back, newest first."""
+    since = today - dt.timedelta(days=today.weekday() + 7 * (WEEKS - 1))
     out = git(repo, "log", f"--since={since} 00:00", f"--until={today} 23:59:59", "-p",
               "--format=@@C %as", "--", "projects/", check=False)
     done, date = {}, None
@@ -179,6 +185,44 @@ def recently_done(repo, current_ids, today, days=7):
             if m and m.group(1) not in current_ids and m.group(1) not in done:
                 done[m.group(1)] = (date, m.group(3).split(" · ")[0].partition(" — ")[0])
     return sorted(((d, i, t) for i, (d, t) in done.items()), reverse=True)
+
+
+def recently_done(closed, today, days=7):
+    """The closed items of the `days` days up to and including `today`."""
+    since = str(today - dt.timedelta(days=days - 1))
+    return [c for c in closed if c[0] >= since]
+
+
+def weekly_counts(closed, today):
+    """[(label, count)] for the last WEEKS ISO weeks, oldest first; the last is this week."""
+    out = []
+    for k in range(WEEKS - 1, -1, -1):
+        mon = today - dt.timedelta(days=today.weekday() + 7 * k)
+        lo, hi = str(mon), str(mon + dt.timedelta(days=6))
+        out.append((f"W{mon.isocalendar().week:02d}", sum(1 for c in closed if lo <= c[0] <= hi)))
+    return out
+
+
+FOCUS_RE = re.compile(r"^\d+\.\s+([A-Z][A-Z0-9]*-\d+)\s+—\s+(.+)$")
+
+
+def load_focus(repo):
+    """FOCUS.md → (heading, [(id, outcome, done_when)], [other lines]); None if absent."""
+    path = repo / CFG["focus"]
+    if not path.is_file():
+        return None
+    head, picks, notes = "", [], []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        m = FOCUS_RE.match(line)
+        if m:
+            outcome, _, when = m.group(2).partition(" · done when: ")
+            picks.append((m.group(1), outcome.strip(), when.strip()))
+        elif line.startswith("# ") and not head:
+            head = line[2:].removeprefix("Focus").strip(" —-")
+        elif line and not line.startswith("#"):
+            notes.append(line)
+    return head, picks, notes
 
 
 def annotate(projects, items, today):
@@ -230,7 +274,7 @@ def days_txt(n):
     return "today" if n == 0 else (f"in {n} d" if n > 0 else f"{-n} d overdue")
 
 
-def item_html(it, items, today, show_project=None):
+def item_html(it, items, today, show_project=None, area=None):
     meta = []
     if it["note"]:
         meta.append(link_ids(it["note"], items))
@@ -251,7 +295,8 @@ def item_html(it, items, today, show_project=None):
     extra = "".join(f"<div class='meta'>· {link_ids(e, items)}</div>" for e in it["extra"])
     touched = f" · updated {it['touched']}" if it.get("touched") else ""
     proj = f"{esc(show_project)} · " if show_project else ""
-    return (f'<li data-st="{esc(it["state"])}" data-now="{int(it["now"])}">'
+    data_area = f' data-area="{esc(area)}"' if area else ""
+    return (f'<li data-st="{esc(it["state"])}" data-now="{int(it["now"])}"{data_area}>'
             f'<div class="st {esc(it["state"])}">{esc(it["state"])}</div><div>'
             f'<div class="t">{esc(it["title"])}</div>'
             f'<div class="meta">{" · ".join(meta)}</div>{extra}'
@@ -259,7 +304,44 @@ def item_html(it, items, today, show_project=None):
             f'</div></li>')
 
 
-def render_html(projects, items, problems, done, today, generated, pull_error):
+def week_html(focus, weeks, items, today):
+    """The 'This week' strip: FOCUS.md picks with their live state, and closed per week."""
+    parts = []
+    if focus:
+        head, picks, notes = focus
+        lis = []
+        for iid, outcome, when in picks:
+            it = items.get(iid)
+            if it is None:
+                st, info = "done", "line is gone — done"
+            else:
+                st = it["state"]
+                info = f"#{st}"
+                if it["check"]:
+                    n = (it["check"] - today).days
+                    info += f" · check {days_txt(n)}"
+            ref = f'<a href="#{esc(iid)}">{esc(iid)}</a>' if it else f"<s>{esc(iid)}</s>"
+            when_html = f"<div class='meta'>done when: {link_ids(when, items)}</div>" if when else ""
+            lis.append(f"<li class='pick{' got' if it is None else ''}'><div class='st {esc(st)}'>"
+                       f"{'✓' if it is None else esc(st)}</div><div><div class='t'>{link_ids(outcome, items)}</div>"
+                       f"{when_html}<div class='src'>{ref} · {esc(info)}</div></div></li>")
+        note_html = "".join(f"<div class='meta'>{link_ids(n, items)}</div>" for n in notes)
+        got = sum(1 for p in picks if p[0] not in items)
+        parts.append(f"<div class='focus'><h2>This week <span class='meta'>{esc(head)}</span>"
+                     f"<span class='pstatus'>{got} of {len(picks)} done</span></h2>"
+                     f"<ul>{''.join(lis) or '<li><div></div><div class=meta>No picks.</div></li>'}</ul>{note_html}</div>")
+    top = max([n for _, n in weeks] + [1])
+    bars = "".join(
+        f"<div class='wk{' cur' if i == len(weeks) - 1 else ''}' title='{n} closed in {lbl}'>"
+        f"<b>{n}</b><i style='height:{max(2, round(64 * n / top))}px'></i><span>{lbl}</span></div>"
+        for i, (lbl, n) in enumerate(weeks))
+    parts.append(f"<div class='closed'><h2>Closed per week</h2><div class='bars'>{bars}</div>"
+                 f"<div class='meta'>{esc(weeks[-1][0])} so far · item lines deleted, from git</div></div>")
+    return f"<section id='week' class='week{' solo' if not focus else ''}'>{''.join(parts)}</section>"
+
+
+def render_html(projects, items, problems, done, today, generated, pull_error,
+                focus=None, weeks=(), built=0, stale=0):
     allitems = [it for p in projects for it in p["items"]]
     now = [(p, it) for p in projects for it in p["items"] if it["now"]]
     now.sort(key=lambda pi: sort_key(pi[1]))
@@ -275,8 +357,9 @@ def render_html(projects, items, problems, done, today, generated, pull_error):
     areas = ["all"] + [a for a in area_list(projects) if any(p["area"] == a for p in projects)]
     filt = "".join(f'<button data-a="{a}" class="{"on" if a == "all" else ""}">{a}</button>' for a in areas)
 
-    now_html = "".join(item_html(it, items, today, p["name"]) for p, it in now) or \
-        '<li><div class="st"></div><div class="meta">Nothing due today.</div></li>'
+    now_html = "".join(item_html(it, items, today, p["name"], p["area"]) for p, it in now)
+    now_html = (now_html + '<li class="empty hidden"><div></div><div class="meta">Nothing here for this filter.</div></li>'
+                if now_html else '<li><div class="st"></div><div class="meta">Nothing due today.</div></li>')
 
     order = {"active": 0, "paused": 1, "done": 2}
     cards = []
@@ -318,6 +401,9 @@ def render_html(projects, items, problems, done, today, generated, pull_error):
             .replace("%SOURCE%", source)
             .replace("%SCHEDULE%", f" · {esc(CFG['schedule'])}" if CFG["schedule"] else "")
             .replace("%GENERATED%", esc(generated))
+            .replace("%BUILT%", str(int(built)))
+            .replace("%STALE%", str(int(stale)))
+            .replace("%WEEK%", week_html(focus, weeks, items, today) if weeks else "")
             .replace("%WARN%", warn_html)
             .replace("%STATS%", stats_html)
             .replace("%FILTERS%", filt)
@@ -398,10 +484,16 @@ def main():
     projects, items, problems = load(repo)
     problems = cfg_problems + problems
     annotate(projects, items, today)
-    done = recently_done(repo, items, today)
+    closed = closed_items(repo, items, today)
+    done = recently_done(closed, today)
+    focus = load_focus(repo)
+    # The stale warning compares the build time with the viewer's clock, so it is meaningless
+    # for a page built with a fixed --today (the demo).
+    stale = 0 if a.today else CFG["stale"]
 
     write_atomic(Path(a.site) / "index.html",
-                 render_html(projects, items, problems, done, today, generated, pull_error))
+                 render_html(projects, items, problems, done, today, generated, pull_error,
+                             focus, weekly_counts(closed, today), dt.datetime.now().timestamp(), stale))
 
     # TASKER.md carries the generation time only in its header; compare the rest so a
     # rebuild with no item changes does not create a commit.
@@ -447,16 +539,38 @@ TEMPLATE = r"""<!doctype html>
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
 a{color:inherit;text-decoration-color:var(--line)}
-header,.stats,.filters,main{max-width:1180px;margin-left:auto;margin-right:auto;padding-left:16px;padding-right:16px}
+header,.stalebar,.stats,.filters,main{max-width:1180px;margin-left:auto;margin-right:auto;padding-left:16px;padding-right:16px}
 header{padding-top:20px}
 h1{font-size:20px;margin:0 0 2px}
 .sub{color:var(--muted);font-size:12px}
+.stalebar{margin-top:12px}
+.stalebar div{background:var(--alert);color:#fff;border-radius:10px;padding:8px 12px;font-weight:600}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:14px;margin-bottom:14px}
-.stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;user-select:none}
-.stat b{display:block;font-size:22px}
-.stat span{font-size:12px;color:var(--muted)}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 12px;cursor:pointer;user-select:none;display:flex;gap:10px;align-items:center}
+.stat b{font-size:22px;min-width:1.4em;font-variant-numeric:tabular-nums}
+.stat span{font-size:12px;line-height:1.25;color:var(--muted)}
+.stat[data-k=now] b{color:var(--alert)}
+.stat:hover{border-color:var(--muted)}
 .stat.on{outline:2px solid var(--ink)}
-.filters{display:flex;flex-wrap:wrap;gap:6px}
+.filters{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.filters input{margin-left:auto;width:240px;max-width:100%;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:999px;padding:5px 12px;font:inherit;font-size:13px}
+.filters input:focus{outline:2px solid var(--next);outline-offset:-1px}
+@media (max-width:620px){.filters input{margin-left:0;width:100%;order:-1}}
+.week{display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:0;padding:0}
+.week>div{padding:12px 14px}
+.week .closed{border-left:1px solid var(--line)}
+.week.solo{grid-template-columns:260px}
+.week.solo .closed{border-left:0}
+.pick .st{font-size:12px}
+.pick.got .t{text-decoration:line-through;text-decoration-color:var(--muted);color:var(--muted)}
+.bars{display:flex;gap:10px;align-items:flex-end;height:110px;padding-bottom:4px}
+.wk{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:3px}
+.wk b{font-size:13px;font-variant-numeric:tabular-nums}
+.wk i{display:block;width:100%;max-width:38px;border-radius:4px 4px 0 0;background:var(--done);opacity:.55}
+.wk.cur i{opacity:1}
+.wk span{font-size:11px;color:var(--muted);font-family:ui-monospace,Consolas,monospace}
+@media (max-width:700px){.week{grid-template-columns:1fr}.week .closed{border-left:0;border-top:1px solid var(--line)}}
+#nomatch{text-align:center;padding:20px 0}
 .filters button{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:999px;padding:4px 12px;font:inherit;font-size:12px;cursor:pointer}
 .filters button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 %AREACSS%.filters button[data-a]:not([data-a=all]){color:var(--a-ink)}
@@ -493,38 +607,48 @@ li.w{display:block;color:var(--alert);font-size:12px}
 @media (max-width:420px){.grid{grid-template-columns:1fr} li{grid-template-columns:60px 1fr} #done li[data-area]{grid-template-columns:52px 64px 1fr;column-gap:8px}}
 </style>
 </head>
-<body>
+<body data-built="%BUILT%" data-stale="%STALE%">
 <header>
   <h1>%TITLE%</h1>
-  <div class="sub">Generated %GENERATED%%SOURCE% · read-only%SCHEDULE% · edit items in <code>projects/*.md</code></div>
+  <div class="sub">Generated %GENERATED%<span id="age"></span>%SOURCE% · read-only%SCHEDULE% · edit items in <code>projects/*.md</code></div>
 </header>
+<div class="stalebar hidden" id="stale"><div></div></div>
 <div class="stats" id="stats">%STATS%</div>
-<div class="filters" id="filters">%FILTERS%</div>
+<div class="filters" id="filters">%FILTERS%<input type="search" id="q" placeholder="Search items  ( / )" aria-label="Search items" autocomplete="off"></div>
 <main>
 %WARN%
+%WEEK%
 <section id="now"><h2>Needs you now <span class="meta">— check dates reached, and waiting items whose blockers are done</span></h2><ul>%NOW%</ul></section>
 <div class="grid" id="grid">%CARDS%</div>
+<p id="nomatch" class="meta hidden">No project item matches.</p>
 <section id="done"><h2>Done in the last 7 days</h2><ul>%DONE%</ul></section>
 </main>
 <script>
 (function(){
-  var area="all", state=null;
+  var area="all", state=null, q="", box=document.getElementById("q");
+  function hit(el){return !q||el.textContent.toLowerCase().indexOf(q)>=0;}
+  function inArea(el){return area==="all"||el.dataset.area===area;}
+  function list(sel,test){  // filter the items of one list; its li.empty shows when none is left
+    var shown=0;
+    document.querySelectorAll(sel+" li[data-area]").forEach(function(li){
+      var ok=test(li); li.classList.toggle("hidden",!ok); if(ok) shown++;
+    });
+    var empty=document.querySelector(sel+" li.empty");
+    if(empty) empty.classList.toggle("hidden",shown>0);
+  }
   function apply(){
+    var cards=0;
     document.querySelectorAll(".proj").forEach(function(c){
-      var show=area==="all"||c.dataset.area===area, any=false;
+      var whole=q&&hit(c.querySelector("h2"))||q&&hit(c.querySelector(".pid")), any=false;
       c.querySelectorAll("li").forEach(function(li){
-        var ok=!state||(state==="now"?li.dataset.now==="1":li.dataset.st===state);
+        var ok=(!state||(state==="now"?li.dataset.now==="1":li.dataset.st===state))&&(whole||hit(li));
         li.classList.toggle("hidden",!ok); if(ok) any=true;
       });
-      c.classList.toggle("hidden",!show||!any);
+      var show=inArea(c)&&any; c.classList.toggle("hidden",!show); if(show) cards++;
     });
-    var shown=0;
-    document.querySelectorAll("#done li[data-area]").forEach(function(li){
-      var ok=area==="all"||li.dataset.area===area;
-      li.classList.toggle("hidden",!ok); if(ok) shown++;
-    });
-    var empty=document.querySelector("#done li.empty");
-    if(empty) empty.classList.toggle("hidden",shown>0);
+    document.getElementById("nomatch").classList.toggle("hidden",cards>0);
+    list("#now",function(li){return inArea(li)&&hit(li);});
+    list("#done",function(li){return inArea(li)&&hit(li);});
     document.querySelectorAll(".stat").forEach(function(s){s.classList.toggle("on",s.dataset.k===state);});
     document.querySelectorAll("#filters button").forEach(function(b){b.classList.toggle("on",b.dataset.a===area);});
     try{localStorage.setItem("tasker",JSON.stringify({area:area,state:state}));}catch(e){}
@@ -532,7 +656,23 @@ li.w{display:block;color:var(--alert);font-size:12px}
   try{var s=JSON.parse(localStorage.getItem("tasker")||"{}"); area=s.area||"all"; state=s.state||null;}catch(e){}
   document.querySelectorAll(".stat").forEach(function(s){s.onclick=function(){state=state===s.dataset.k?null:s.dataset.k;apply();};});
   document.querySelectorAll("#filters button").forEach(function(b){b.onclick=function(){area=b.dataset.a;apply();};});
+  box.oninput=function(){q=box.value.trim().toLowerCase();apply();};
+  box.onkeydown=function(e){if(e.key==="Escape"){box.value="";q="";apply();box.blur();}};
+  document.addEventListener("keydown",function(e){
+    if(e.key==="/"&&document.activeElement!==box&&!e.ctrlKey&&!e.metaKey){e.preventDefault();box.focus();}
+  });
   apply();
+  // Age of the page, and a red bar once it is older than stale_minutes (the build stopped).
+  var built=+document.body.dataset.built, lim=+document.body.dataset.stale;
+  function age(){
+    var m=Math.max(0,Math.round((Date.now()/1000-built)/60));
+    var txt=m<1?"just now":m<120?m+" min ago":m<2880?Math.round(m/60)+" h ago":Math.round(m/1440)+" days ago";
+    document.getElementById("age").textContent=" ("+txt+")";
+    var bar=document.getElementById("stale"), bad=lim>0&&m>lim;
+    bar.classList.toggle("hidden",!bad);
+    if(bad) bar.firstChild.textContent="Stale: this page was last built "+txt+" — the build has stopped. The items below may be out of date.";
+  }
+  if(built){age();setInterval(age,60000);}
 })();
 </script>
 </body>

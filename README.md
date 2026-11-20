@@ -52,6 +52,20 @@ Projects are registered in `projects.yaml` (id, name, area, status, docs). Each 
 a `projects/<ID>.md`. Typos, unknown states, duplicate IDs and orphan files show in a red box at the
 top of the dashboard.
 
+## The page
+
+- **Stats and area chips** filter the project cards; area chips also filter *Needs you now* and *Done*.
+  **Search** (press `/`) filters every list by ID, title, note or project name; `Esc` clears it.
+- **This week** shows the picks from `FOCUS.md`, each with its item's current state (a pick whose
+  line is gone counts as done), next to **closed per week** for the last four weeks, counted from git.
+  `FOCUS.md` format, three lines at most:
+
+  ```
+  # Focus — week of 2026-11-02
+  1. WEB-3 — Redirect map ready · done when: all 140 old URLs map to a new page
+  ```
+- The header shows how old the page is; with `stale_minutes` set, a red bar says the build has stopped.
+
 ## Quick start (GitHub Pages)
 
 1. Copy the example into a new repo of your own:
@@ -111,6 +125,8 @@ git clone --branch v1.0.0 https://github.com/xlysoft85/tasker-app /opt/tasker
 | `source` | — | `{name, url}` for the header link to the data repo |
 | `schedule` | — | Text shown in the header, e.g. `rebuilds every 15 min` |
 | `refresh_minutes` | `15` | Page auto-reload; `0` turns it off |
+| `stale_minutes` | `0` (off) | Red *stale* bar when the page is older than this — the build has stopped. Set it to about 3× your build interval; leave it off if you build only on push |
+| `focus` | `FOCUS.md` | File with the week's picks, shown as *This week* (see below). Missing file → no picks, just the closed-per-week chart |
 | `commit` | git's own identity | `{name, email}` for the `TASKER.md` commits |
 | `repos` | — | `name: url` or `name: {url, branch}`. Turns `doc:<name>/<path>` into a link |
 
