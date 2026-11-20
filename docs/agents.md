@@ -9,7 +9,7 @@ updates the item in the same session. Paste this into the agent's instructions (
 
 My open items live in `~/my-tasker` (git). One line per item in `projects/<ID>.md`:
 
-    - <ID> #next|waiting|watch|someday <Title> — <note> · since:YYYY-MM-DD · check:YYYY-MM-DD · on:<what/IDs> · doc:<repo/path>
+    - <ID> #next|working|waiting|watch|someday <Title> — <note> · since:YYYY-MM-DD · check:YYYY-MM-DD · on:<what/IDs> · doc:<repo/path>
 
 - Pull before reading. `TASKER.md` is generated — never edit it.
 - When this session changes an item's state (got an answer, merged a PR, received a part), edit its line,

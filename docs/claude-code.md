@@ -73,7 +73,7 @@ Tasker — needs you now (https://you.github.io/my-tasker/):
 The `permissions` entries let Claude pull and edit items without asking each time. Commits and pushes
 still ask, unless you also allow `Bash(git commit:*)` and `Bash(git push:*)`.
 
-The dashboard's *Needs you now* comes from `TASKER.md`, which your workflow regenerates after each push.
+The hook's *Needs you now* comes from `TASKER.md`, which your workflow regenerates after each push.
 Locally edited items show up there once that build has run and the next session pulls.
 
 ## Other agents

@@ -19,8 +19,15 @@ while read -r _ line; do
   id=${line#- }; id=${id%% *}
   echo "$line" >> "projects/${id%-*}.md"
 done <<< "$done_items"
+# #working items start as #next, so their card history shows the move.
+working=$(grep -ho '^- [A-Z0-9]*-[0-9]* #working ' projects/*.md | cut -d' ' -f2 || true)
+for id in $working; do sed -i "s/^- $id #working /- $id #next /" "projects/${id%-*}.md"; done
 git add -A
 commit "$(date -d "$today -10 days" +%F)" "Start Tasker"
+for id in $working; do
+  sed -i "s/^- $id #next /- $id #working /" "projects/${id%-*}.md"
+  commit "$(date -d "$today -8 days" +%F)" "$id: started"
+done
 
 while read -r ago line; do
   id=${line#- }; id=${id%% *}

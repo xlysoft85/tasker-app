@@ -1,0 +1,37 @@
+# Routines: what runs on its own, shown in the dashboard's Routines view. Every field but name is optional.
+# status: active | paused | planned   ·   doc: <repo>/<path> becomes a link, like an item's doc:
+- name: Tasker build
+  description: Rebuilds this dashboard and TASKER.md, commits TASKER.md when an item changed
+  schedule: on every push, and daily
+  runs_on: GitHub Actions
+  account: none
+  status: active
+  doc: my-tasker/.github/workflows/tasker.yml
+
+- name: Inbox triage
+  description: Reads yesterday's mail and chat mentions, adds at most five new items, unsure ones go to an inbox note
+  schedule: "weekdays 08:15"
+  runs_on: laptop, scheduled task
+  account: work agent
+  status: active
+
+- name: Friday review
+  description: What closed, what is stuck, which stale items to drop; writes next week's three picks to FOCUS.md
+  schedule: "Fri 16:00"
+  runs_on: laptop, scheduled task
+  account: personal agent
+  status: active
+  doc: handbook/planning/weekly-review.md
+
+- name: Morning summary
+  description: One chat message with the week's picks and overdue items
+  schedule: "weekdays 08:30"
+  runs_on: home server cron
+  account: none
+  status: paused
+
+- name: Renewal reminder
+  description: A month before a tool renewal, add an item to VEND with the current seat count
+  schedule: monthly
+  runs_on: cloud
+  status: planned

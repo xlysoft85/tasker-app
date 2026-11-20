@@ -9,10 +9,10 @@ Each open item is one line of Markdown in a git repo:
 - WEB-1 #waiting Legal sign-off on the cookie banner — sent Monday · check:2026-11-02 · on:Legal (Dana)
 ```
 
-Tasker reads those files and builds a static dashboard and a `TASKER.md` overview. It shows
-what you can act on, what you're waiting on and since when, and which check dates have come due.
-It also flags waiting items whose blockers are finished, and lists what you finished this week,
-read from git history.
+Tasker reads those files and builds a static dashboard, a kanban board, and a `TASKER.md` overview.
+It shows what you can act on, what you're working on, what you're waiting on and since when, and
+which check dates have come due. It also flags waiting items whose blockers are finished, shows each
+item's history, and lists what you finished this week. History and finished items come from git.
 
 **[Live demo →](https://xlysoft85.github.io/tasker-app/)** (built from [`example/`](example/); the
 *Done* list comes from [`demo/done.txt`](demo/done.txt))
@@ -38,6 +38,7 @@ can come in any order. Indented lines under an item make a short sub-list.
 | State | Meaning | Usually has |
 |-------|---------|-------------|
 | `#next` | You (or an agent) can act on it now | — |
+| `#working` | Someone is on it right now. Keep these few (`wip_limit`) | — |
 | `#waiting` | Waiting on a thing, a person or another item | `on:`, `since:`, `check:` |
 | `#watch` | Done, but verify when a condition holds | `check:` |
 | `#someday` | Wanted, not planned | — |
@@ -54,8 +55,27 @@ top of the dashboard.
 
 ## The page
 
-- **Stats and area chips** filter the project cards; area chips also filter *Needs you now* and *Done*.
-  **Search** (press `/`) filters every list by ID, title, note or project name; `Esc` clears it.
+One static `index.html` with its CSS and JavaScript inline: no server, no CDN, no build step.
+
+- **Board.** Columns *Someday* · *Next* · *Working* · *Blocked* · *Done*. *Blocked* holds `#waiting`
+  items and `#watch` items, which carry a **verify** badge. The *Working* header shows
+  `n / wip_limit` and turns amber above the limit. A card shows its ID, project (in its area's
+  colour), title, `check:` date and `on:`. Cards that need you now have a red edge and sort first:
+  their check date has come, or everything they wait on is done (**unblocked**). Check dates are red
+  when due and amber within three days.
+- **Done drawer.** The narrow column on the right; click it to open. It lists items whose line was
+  deleted in the last 7 days (the ID is gone from every file), with the date. *closed this week*
+  counts Monday to Sunday.
+- **Filters.** Area chips: `default_area` sets the first one, then each browser remembers your last
+  choice. Also a project menu, a *needs you now* toggle, and **Group by project**, which gives each
+  project its own row across the columns. **Search** (press `/`) matches ID, title, note, `on:` and
+  project; `Esc` clears it.
+- **Card details.** Click a card, or open `…/#WEB-3`, to see every field: the note, the indented
+  sub-lines, the `doc:` link, and the **history**. The history lists the commits that changed that
+  item's line in the last 90 days, newest first, with the state change (`#next → #working`). Edits to
+  the sub-lines alone are not counted. One `git log -p` pass over `projects/` reads it all.
+- **Routines** view: what runs on its own, from `routines.yaml` (see below). Without that file the
+  view is hidden.
 - **This week** shows the picks from `FOCUS.md`, each with its item's current state (a pick whose
   line is gone counts as done), next to **closed per week** for the last four weeks, counted from git.
   `FOCUS.md` format, three lines at most:
@@ -64,7 +84,30 @@ top of the dashboard.
   # Focus — week of 2026-11-02
   1. WEB-3 — Redirect map ready · done when: all 140 old URLs map to a new page
   ```
+- **Theme** follows the system. The button in the corner cycles *Auto → Light → Dark*, and each
+  browser remembers the choice.
 - The header shows how old the page is; with `stale_minutes` set, a red bar says the build has stopped.
+
+The page needs JavaScript. Without it, read `TASKER.md`.
+
+## Routines
+
+`routines.yaml` in the data repo lists the jobs that run on their own: a cron job, a scheduled
+agent, a CI workflow. The Routines view shows the list; Tasker does not run them or check that they
+ran.
+
+```yaml
+- name: Friday review
+  description: What closed, what is stuck; writes next week's picks to FOCUS.md
+  schedule: "Fri 16:00"          # free text; quote anything that starts with * or contains ": "
+  runs_on: laptop, scheduled task
+  account: personal agent        # free text: who or what it runs as
+  status: active                 # active | paused | planned
+  doc: handbook/planning/weekly-review.md   # like an item's doc: — a repo from tasker.yaml becomes a link
+```
+
+Only `name` is required, and `status` defaults to `active`. An unknown key, a bad status or a YAML
+error shows in the red *Format problems* box.
 
 ## Quick start (GitHub Pages)
 
@@ -111,7 +154,7 @@ to change the script that runs on your build host. Install a tagged release of t
 update it on purpose:
 
 ```bash
-git clone --branch v1.0.0 https://github.com/xlysoft85/tasker-app /opt/tasker
+git clone --branch v1.3.0 https://github.com/xlysoft85/tasker-app /opt/tasker
 ```
 
 ## Configuration
@@ -126,7 +169,10 @@ git clone --branch v1.0.0 https://github.com/xlysoft85/tasker-app /opt/tasker
 | `schedule` | — | Text shown in the header, e.g. `rebuilds every 15 min` |
 | `refresh_minutes` | `15` | Page auto-reload; `0` turns it off |
 | `stale_minutes` | `0` (off) | Red *stale* bar when the page is older than this — the build has stopped. Set it to about 3× your build interval; leave it off if you build only on push |
-| `focus` | `FOCUS.md` | File with the week's picks, shown as *This week* (see below). Missing file → no picks, just the closed-per-week chart |
+| `default_area` | `all` | Area chip selected on a browser's first visit; after that the browser remembers the last chip |
+| `wip_limit` | `5` | Most `#working` items before the *Working* column turns amber |
+| `focus` | `FOCUS.md` | File with the week's picks, shown as *This week* (see above). Missing file → no picks, just the closed-per-week chart |
+| `routines` | `routines.yaml` | File for the Routines view (see above). Missing file → no Routines view |
 | `commit` | git's own identity | `{name, email}` for the `TASKER.md` commits |
 | `repos` | — | `name: url` or `name: {url, branch}`. Turns `doc:<name>/<path>` into a link |
 
