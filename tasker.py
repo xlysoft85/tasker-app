@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 STATES = ["working", "next", "waiting", "watch", "someday"]
 ITEM_RE = re.compile(r"^- ([A-Z][A-Z0-9]*-\d+) #(\w+) (.+)$")
 ID_RE = re.compile(r"\b[A-Z][A-Z0-9]*-\d+\b")
@@ -183,24 +183,27 @@ def load(repo):
     return projects, seen, problems
 
 
-WEEKS = 4  # closed-per-week chart: this week and the three before
+WEEKS = 8  # opened-vs-closed chart: this week and the seven before
 HISTORY_DAYS = 90  # card modal: commits that touched the item's line in this many days
 HISTORY_MAX = 40  # … at most this many per item
 
 
 def scan_history(repo, current_ids, today):
-    """One `git log -p` pass over projects/ → (history, closed).
+    """One `git log -p` pass over projects/ → (history, closed, opened).
 
     history: id → [(date, short hash, subject, change)], newest first, last HISTORY_DAYS days.
     closed: [(date, id, item)] of items whose line was deleted (the ID is gone everywhere) since
     the Monday WEEKS-1 weeks back, newest first; item is the deleted line, parsed.
-    Outside a git repo both are empty.
+    opened: id → date its line was first added, for IDs first added since that Monday. "First
+    added" = the oldest commit in the scan that touches the ID adds its line without removing
+    one, so an edit or a move between files is not an opening.
+    Outside a git repo all three are empty.
     """
     weeks_since = today - dt.timedelta(days=today.weekday() + 7 * (WEEKS - 1))
     since = min(today - dt.timedelta(days=HISTORY_DAYS), weeks_since)
     out = git(repo, "log", f"--since={since} 00:00", f"--until={today} 23:59:59", "-p",
               "--no-renames", "--format=@@C %h %as %s", "--", "projects/", check=False)
-    history, done = {}, {}
+    history, done, first = {}, {}, {}
     commit, old, new = None, {}, {}
 
     def flush():
@@ -213,6 +216,7 @@ def scan_history(repo, current_ids, today):
             hist = history.setdefault(iid, [])
             if len(hist) < HISTORY_MAX:
                 hist.append((commit[1], commit[0], commit[2], change))
+            first[iid] = (commit[1], bool(n and not o))  # newest first: the last write is the oldest
 
     for line in out.splitlines():
         if line.startswith("@@C "):
@@ -232,7 +236,15 @@ def scan_history(repo, current_ids, today):
     flush()
     closed = sorted(((d, i, it) for i, (d, it) in done.items()), key=lambda c: (c[0], c[1]),
                     reverse=True)
-    return history, closed
+    opened = {i: d for i, (d, added) in first.items() if added and d >= str(weeks_since)}
+    return history, closed, opened
+
+
+def repo_start(repo):
+    """Date of the repo's first commit, or None outside a git repo."""
+    out = git(repo, "rev-list", "--max-parents=0", "--format=%as", "HEAD", check=False)
+    dates = [line for line in out.splitlines() if not line.startswith("commit ")]
+    return dt.date.fromisoformat(min(dates)) if dates else None
 
 
 def recently_done(closed, today, days=7):
@@ -241,13 +253,20 @@ def recently_done(closed, today, days=7):
     return [c for c in closed if c[0] >= since]
 
 
-def weekly_counts(closed, today):
-    """[(label, count)] for the last WEEKS ISO weeks, oldest first; the last is this week."""
+def weekly_flow(closed, opened, today, start):
+    """[(label, monday, opened, closed)] for the last WEEKS ISO weeks (Mon–Sun), oldest first;
+    the last is this week. A week that ends before `start` (the first commit; None = no git) has
+    no data: opened and closed are None there, not 0."""
     out = []
     for k in range(WEEKS - 1, -1, -1):
         mon = today - dt.timedelta(days=today.weekday() + 7 * k)
         lo, hi = str(mon), str(mon + dt.timedelta(days=6))
-        out.append((f"W{mon.isocalendar().week:02d}", sum(1 for c in closed if lo <= c[0] <= hi)))
+        label = f"W{mon.isocalendar().week:02d}"
+        if start is None or str(start) > hi:
+            out.append((label, mon, None, None))
+            continue
+        out.append((label, mon, sum(1 for d in opened.values() if lo <= d <= hi),
+                    sum(1 for c in closed if lo <= c[0] <= hi)))
     return out
 
 
@@ -358,8 +377,8 @@ def days_txt(n):
     return "today" if n == 0 else (f"in {n} d" if n > 0 else f"{-n} d overdue")
 
 
-def week_html(focus, weeks, items, today):
-    """The 'This week' strip: FOCUS.md picks with their live state, and closed per week."""
+def week_html(focus, weeks, items, today, start=None):
+    """The 'This week' strip: FOCUS.md picks with their live state, and opened vs closed per week."""
     parts = []
     if focus:
         head, picks, notes = focus
@@ -384,14 +403,86 @@ def week_html(focus, weeks, items, today):
         parts.append(f"<div class='focus'><h2>This week <span class='meta'>{esc(head)}</span>"
                      f"<span class='pstatus'>{got} of {len(picks)} done</span></h2>"
                      f"<ul>{''.join(lis) or '<li><div></div><div class=meta>No picks.</div></li>'}</ul>{note_html}</div>")
-    top = max([n for _, n in weeks] + [1])
-    bars = "".join(
-        f"<div class='wk{' cur' if i == len(weeks) - 1 else ''}' title='{n} closed in {lbl}'>"
-        f"<b>{n}</b><i style='height:{max(2, round(64 * n / top))}px'></i><span>{lbl}</span></div>"
-        for i, (lbl, n) in enumerate(weeks))
-    parts.append(f"<div class='closed'><h2>Closed per week</h2><div class='bars'>{bars}</div>"
-                 f"<div class='meta'>{esc(weeks[-1][0])} so far · item lines deleted, from git</div></div>")
+    parts.append(flow_html(weeks, start))
     return f"<section id='week' class='week{' solo' if not focus else ''}'>{''.join(parts)}</section>"
+
+
+def nice_top(n):
+    """Smallest 'round' axis maximum ≥ n: 1 2 3 4 5 6 8 10 20 30 …"""
+    scale = 1
+    while True:
+        for m in (1, 2, 3, 4, 5, 6, 8):
+            if m * scale >= n:
+                return m * scale
+        scale *= 10
+
+
+def fmt_week(mon):
+    sun = mon + dt.timedelta(days=6)
+    return f"{mon:%d %b}–{sun:%d %b}".lstrip("0").replace("–0", "–")
+
+
+def flow_html(weeks, start):
+    """Opened vs closed per week (inline SVG, grouped columns), legend, and the same numbers as a
+    table. A week without git data draws no bars (empty, not zero)."""
+    W, H, ax, top_y, base = 272, 122, 22, 16, 94
+    gw = (W - ax) / len(weeks)
+    bw, gap = 11, 2
+    vals = [v for _, _, o, c in weeks for v in (o, c) if v is not None]
+    top = nice_top(max(vals + [1]))
+    ph = base - top_y
+
+    def y(v):
+        return base - ph * v / top
+
+    def bar(x, v, cls):
+        if v == 0:  # zero is data: a flat stub on the baseline
+            return f"<rect class='{cls}' x='{x:.1f}' y='{base - 1.5}' width='{bw}' height='1.5'/>"
+        h = base - y(v)
+        r = min(3.0, h, bw / 2)
+        return (f"<path class='{cls}' d='M{x:.1f},{base}V{base - h + r:.1f}Q{x:.1f},{base - h:.1f} "
+                f"{x + r:.1f},{base - h:.1f}H{x + bw - r:.1f}Q{x + bw:.1f},{base - h:.1f} "
+                f"{x + bw:.1f},{base - h + r:.1f}V{base}Z'/>")
+
+    svg = []
+    for v in ([0, top // 2, top] if top % 2 == 0 else [0, top]):
+        svg.append(f"<line class='gl' x1='{ax}' x2='{W}' y1='{y(v):.1f}' y2='{y(v):.1f}'/>"
+                   f"<text class='tk' x='{ax - 4}' y='{y(v) + 3:.1f}'>{v}</text>")
+    for i, (lbl, mon, o, c) in enumerate(weeks):
+        gx = ax + i * gw
+        cur = i == len(weeks) - 1
+        x0 = gx + (gw - 2 * bw - gap) / 2
+        if o is None:
+            tip = f"{lbl} ({fmt_week(mon)}): no git data"
+            marks = ""
+        else:
+            tip = f"{lbl} ({fmt_week(mon)}): opened {o} · closed {c}"
+            if start and mon <= start <= mon + dt.timedelta(days=6):
+                tip += f" · history starts {start}, so opened includes the first import"
+            marks = bar(x0, o, "fo") + bar(x0 + bw + gap, c, "fc")
+        svg.append(f"<g class='wkg{' cur' if cur else ''}{' nodata' if o is None else ''}'><title>{esc(tip)}</title>"
+                   f"<rect class='hit' x='{gx:.1f}' y='0' width='{gw:.1f}' height='{H}'/>{marks}"
+                   f"<text class='wl' x='{gx + gw / 2:.1f}' y='{base + 14}'>{lbl}</text></g>")
+    empty = all(o is None for _, _, o, _ in weeks)
+    if empty:
+        svg.append(f"<text class='tk na' x='{ax + (W - ax) / 2:.1f}' y='{top_y + ph / 2:.1f}'>no git history</text>")
+    summary = "; ".join(f"{lbl} " + ("no data" if o is None else f"opened {o}, closed {c}")
+                        for lbl, _, o, c in weeks)
+    rows = "".join(f"<tr><td>{lbl}</td><td>{esc(fmt_week(mon))}</td>"
+                   f"<td>{'—' if o is None else o}</td><td>{'—' if c is None else c}</td></tr>"
+                   for lbl, mon, o, c in weeks)
+    lbl, _, o, c = weeks[-1]
+    now = f"<b>{lbl} so far: opened {o} · closed {c}</b> · " if o is not None else ""
+    note = (now + "per week, Mon–Sun · opened = item line first added · closed = line deleted, ID gone · "
+            + ("from git" if not empty else "needs a git checkout"))
+    if start and start > weeks[0][1]:
+        note += f" · history starts {start}"
+    return (f"<div class='flow'><h2>Opened vs closed <span class='lg'><span><i class='sw fo'></i>opened</span>"
+            f"<span><i class='sw fc'></i>closed</span></span></h2>"
+            f"<svg viewBox='0 0 {W} {H}' role='img' aria-label='Opened and closed items per week: {esc(summary)}'>"
+            f"{''.join(svg)}</svg><div class='meta'>{note}</div>"
+            f"<details class='meta'><summary>as a table</summary><table><thead><tr><th>Week</th><th>Mon–Sun</th>"
+            f"<th>Opened</th><th>Closed</th></tr></thead><tbody>{rows}</tbody></table></details></div>")
 
 
 def item_json(it, proj, today):
@@ -408,7 +499,7 @@ def item_json(it, proj, today):
             "unblocked": bool(it.get("unblocked")), "nocheck": bool(it.get("nocheck"))}
 
 
-def board_json(projects, done, history, today, weeks, areas, has_git):
+def board_json(projects, done, history, today, areas, has_git):
     """Everything the board, the card modal and the Done drawer need, as one object."""
     by_id = {p["id"]: p for p in projects}
     items = [(p, it) for p in projects for it in p["items"]]
@@ -473,7 +564,8 @@ def routines_html(routines):
 
 
 def render_html(projects, items, problems, done, today, generated, pull_error,
-                focus=None, weeks=(), built=0, stale=0, history=None, routines=None, has_git=True):
+                focus=None, weeks=(), built=0, stale=0, history=None, routines=None, has_git=True,
+                start=None):
     weeks = list(weeks)
     chips = ["all"] + [a for a in area_list(projects) if any(p["area"] == a for p in projects)]
     default = CFG["default_area"] if CFG["default_area"] in chips else "all"
@@ -491,14 +583,15 @@ def render_html(projects, items, problems, done, today, generated, pull_error,
     source = (f' from <a href="{esc(src["url"])}" target="_blank" rel="noopener">'
               f'{esc(src.get("name") or src["url"])}</a>') if src.get("url") else ""
     refresh = f'<meta http-equiv="refresh" content="{CFG["refresh"] * 60}">' if CFG["refresh"] else ""
-    data = board_json(projects, done, history or {}, today, weeks, chips[1:], has_git)
+    data = board_json(projects, done, history or {}, today, chips[1:], has_git)
     subs = {"TITLE": esc(CFG["title"]), "VERSION": VERSION, "REFRESH": refresh,
             "DARK": DARK_VARS, "AREACSS": area_css(area_list(projects)), "SOURCE": source,
             "SCHEDULE": f" · {esc(CFG['schedule'])}" if CFG["schedule"] else "",
             "GENERATED": esc(generated), "BUILT": str(int(built)), "STALE": str(int(stale)),
-            "WEEK": week_html(focus, weeks, items, today) if weeks else "",
+            "WEEK": week_html(focus, weeks, items, today, start) if weeks else "",
             "WARN": warn_html, "VIEWS": views, "FILTERS": filt,
-            "CLOSEDWEEK": str(weeks[-1][1] if weeks else 0),
+            "OPENEDNOW": "—" if not weeks or weeks[-1][2] is None else str(weeks[-1][2]),
+            "CLOSEDNOW": "—" if not weeks or weeks[-1][3] is None else str(weeks[-1][3]),
             "ROUTINES": routines_html(routines), "DATA": script_json(data)}
     # One pass, so a %NAME% inside item text is never replaced.
     return re.sub(r"%([A-Z]+)%", lambda m: subs.get(m.group(1), m.group(0)), TEMPLATE)
@@ -579,7 +672,8 @@ def main():
     annotate(projects, items, today)
     # History is read even with --no-git (it only reads); outside a git repo it is empty.
     has_git = bool(git(repo, "rev-parse", "--git-dir", check=False).strip())
-    history, closed = scan_history(repo, items, today)
+    history, closed, opened = scan_history(repo, items, today)
+    start = repo_start(repo) if has_git else None
     done = recently_done(closed, today)
     focus = load_focus(repo)
     # The stale warning compares the build time with the viewer's clock, so it is meaningless
@@ -588,8 +682,8 @@ def main():
 
     write_atomic(Path(a.site) / "index.html",
                  render_html(projects, items, problems, done, today, generated, pull_error,
-                             focus, weekly_counts(closed, today), dt.datetime.now().timestamp(),
-                             stale, history, routines, has_git))
+                             focus, weekly_flow(closed, opened, today, start),
+                             dt.datetime.now().timestamp(), stale, history, routines, has_git, start))
 
     # TASKER.md carries the generation time only in its header; compare the rest so a
     # rebuild with no item changes does not create a commit.
@@ -614,7 +708,8 @@ def main():
 DARK_VARS = ("color-scheme:dark;--bg:#151514;--panel:#1e1e1c;--card:#252523;--col:#1a1a18;"
              "--ink:#ecebe6;--muted:#9c9b95;--line:#33322f;--next:#58a6ff;--working:#3fc1b0;"
              "--waiting:#e3b341;--watch:#b392f0;--someday:#8b8b86;--done:#56d364;--alert:#f47067;"
-             "--chip:#2a2a27;--a-ink:#ecebe6;--amber-bg:#4a3814;--amber-ink:#f5d58a;--shadow:none;")
+             "--chip:#2a2a27;--a-ink:#ecebe6;--amber-bg:#4a3814;--amber-ink:#f5d58a;--shadow:none;"
+             "--c-open:#388bfd;--c-closed:#2ea043;")
 
 TEMPLATE = r"""<!doctype html>
 <html lang="en">
@@ -632,6 +727,7 @@ TEMPLATE = r"""<!doctype html>
   --bg:#f6f5f2; --panel:#ffffff; --card:#ffffff; --col:#edebe6; --ink:#1d1d1b; --muted:#6b6a66; --line:#e1dfd9;
   --next:#1f6feb; --working:#0b7a6f; --waiting:#b7791f; --watch:#6f42c1; --someday:#8a8a85; --done:#2e8b57;
   --alert:#c0392b; --chip:#efeee9; --a-ink:#3a3936; --amber-bg:#fbe7c2; --amber-ink:#7a4a00;
+  --c-open:#1f6feb; --c-closed:#2e8b57;
   --shadow:0 1px 2px rgba(0,0,0,.06);
 }
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){%DARK%}}
@@ -679,29 +775,45 @@ li.w{color:var(--alert);font-size:12px;padding:2px 0}
 .pstatus{margin-left:auto;font-size:11px;color:var(--muted)}
 .hidden{display:none !important}
 /* This week */
-.week{display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:0;padding:0}
+.week{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:0;padding:0}
 .week>div{padding:12px 14px}
-.week .closed{border-left:1px solid var(--line)}
-.week.solo{grid-template-columns:260px}
-.week.solo .closed{border-left:0}
+.week .flow{border-left:1px solid var(--line)}
+.week.solo{grid-template-columns:300px}
+.week.solo .flow{border-left:0}
 .week li{display:grid;grid-template-columns:70px 1fr;gap:8px;padding:6px 0;border-top:1px solid var(--line)}
 .week li:first-child{border-top:0}
 .pick .st{font-size:12px}
 .pick.got .t{text-decoration:line-through;text-decoration-color:var(--muted);color:var(--muted)}
-.bars{display:flex;gap:10px;align-items:flex-end;height:110px;padding-bottom:4px}
-.wk{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:3px}
-.wk b{font-size:13px;font-variant-numeric:tabular-nums}
-.wk i{display:block;width:100%;max-width:38px;border-radius:4px 4px 0 0;background:var(--done);opacity:.55}
-.wk.cur i{opacity:1}
-.wk span{font-size:11px;color:var(--muted);font-family:ui-monospace,Consolas,monospace}
-@media (max-width:700px){.week{grid-template-columns:1fr}.week .closed{border-left:0;border-top:1px solid var(--line)}}
+.flow svg{display:block;width:100%;height:auto;margin:2px 0 4px;overflow:visible}
+.flow .fo{fill:var(--c-open)} .flow .fc{fill:var(--c-closed)}
+.flow .gl{stroke:var(--line);stroke-width:1}
+.flow text{font:9.5px ui-monospace,Consolas,monospace;fill:var(--muted)}
+.flow .tk{text-anchor:end}
+.flow .tk.na{text-anchor:middle;font-size:11px}
+.flow .wl{text-anchor:middle}
+.flow .cur .wl{fill:var(--ink);font-weight:700}
+.flow .nodata .wl{opacity:.45}
+.flow .hit{fill:transparent}
+.flow .wkg:hover .hit{fill:var(--chip)}
+.lg{margin-left:auto;display:inline-flex;gap:10px;font-size:11px;font-weight:400;color:var(--muted)}
+.lg span{display:inline-flex;gap:4px;align-items:center}
+.sw{display:inline-block;width:9px;height:9px;border-radius:2px}
+.sw.fo{background:var(--c-open)} .sw.fc{background:var(--c-closed)}
+.flow .meta b{color:var(--ink);font-weight:600}
+.flow details{margin-top:4px}
+.flow summary{cursor:pointer}
+.flow table{border-collapse:collapse;margin-top:4px;font-variant-numeric:tabular-nums}
+.flow th,.flow td{text-align:left;padding:1px 10px 1px 0;font-weight:400}
+.flow th{color:var(--muted)}
+.flow td:nth-child(n+3),.flow th:nth-child(n+3){text-align:right}
+@media (max-width:700px){.week{grid-template-columns:1fr}.week .flow{border-left:0;border-top:1px solid var(--line)}}
 /* Board toolbar */
 .tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
 .tools select{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:4px 10px;font-size:12px;max-width:240px}
 #nowbtn b{color:var(--alert);font-variant-numeric:tabular-nums}
 #nowbtn.on b{color:inherit}
 .cw{margin-left:auto;font-size:12px;color:var(--muted)}
-.cw b{font-size:16px;color:var(--done);font-variant-numeric:tabular-nums}
+.cw b{font-size:15px;color:var(--ink);font-variant-numeric:tabular-nums}
 #nomatch{text-align:center;padding:16px 0}
 /* Board */
 .board{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) 44px;gap:10px;align-items:start}
@@ -803,7 +915,7 @@ a.gone{text-decoration-style:dotted}
   <button type="button" class="tog" id="nowbtn" aria-pressed="false" title="Only items whose check date has come, and waiting items whose blockers are done"><b id="nowcount">0</b> needs you now</button>
   <button type="button" class="tog" id="lanes" aria-pressed="false" title="One row per project across the columns">Group by project</button>
   <select id="proj" aria-label="Project"><option value="">All projects</option></select>
-  <span class="cw" title="Item lines deleted Monday to Sunday, from git">closed this week: <b>%CLOSEDWEEK%</b></span>
+  <span class="cw" title="This week, Monday to Sunday, from git: opened = item lines first added, closed = item lines deleted (ID gone everywhere)">opened this week: <b>%OPENEDNOW%</b> · closed this week: <b>%CLOSEDNOW%</b></span>
 </div>
 <div id="board" class="board cols" data-tasker-board="%VERSION%"><noscript><p class="meta">The board needs JavaScript; <code>TASKER.md</code> has the same items as text.</p></noscript></div>
 <p id="nomatch" class="meta hidden">No item matches these filters.</p>

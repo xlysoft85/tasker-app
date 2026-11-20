@@ -64,8 +64,11 @@ One static `index.html` with its CSS and JavaScript inline: no server, no CDN, n
   their check date has come, or everything they wait on is done (**unblocked**). Check dates are red
   when due and amber within three days.
 - **Done drawer.** The narrow column on the right; click it to open. It lists items whose line was
-  deleted in the last 7 days (the ID is gone from every file), with the date. *closed this week*
-  counts Monday to Sunday.
+  deleted in the last 7 days (the ID is gone from every file), with the date.
+- **Flow.** Above the board, *opened this week: N · closed this week: N* (Monday to Sunday). An
+  item counts as opened in the week its ID's line was first added (an edit, a state change or a
+  move to another file is not an opening). It counts as closed in the week its line was deleted,
+  if the ID is gone from every file.
 - **Filters.** Area chips: `default_area` sets the first one, then each browser remembers your last
   choice. Also a project menu, a *needs you now* toggle, and **Group by project**, which gives each
   project its own row across the columns. **Search** (press `/`) matches ID, title, note, `on:` and
@@ -73,11 +76,15 @@ One static `index.html` with its CSS and JavaScript inline: no server, no CDN, n
 - **Card details.** Click a card, or open `…/#WEB-3`, to see every field: the note, the indented
   sub-lines, the `doc:` link, and the **history**. The history lists the commits that changed that
   item's line in the last 90 days, newest first, with the state change (`#next → #working`). Edits to
-  the sub-lines alone are not counted. One `git log -p` pass over `projects/` reads it all.
+  the sub-lines alone are not counted. One `git log -p` pass over `projects/` reads history, Done and
+  the flow numbers.
 - **Routines** view: what runs on its own, from `routines.yaml` (see below). Without that file the
   view is hidden.
 - **This week** shows the picks from `FOCUS.md`, each with its item's current state (a pick whose
-  line is gone counts as done), next to **closed per week** for the last four weeks, counted from git.
+  line is gone counts as done), next to **opened vs closed** per week for the last eight weeks: paired
+  columns, a tooltip per week, and the same numbers as a table. A week with no git data (before the
+  repo's first commit, or no git checkout at all) is left empty rather than drawn as zero. The week
+  of the first commit counts every item in it as opened.
   `FOCUS.md` format, three lines at most:
 
   ```
@@ -155,7 +162,7 @@ to change the script that runs on your build host. Install a tagged release of t
 update it on purpose:
 
 ```bash
-git clone --branch v1.3.0 https://github.com/xlysoft85/tasker-app /opt/tasker
+git clone --branch v1.4.0 https://github.com/xlysoft85/tasker-app /opt/tasker
 ```
 
 ## Configuration
