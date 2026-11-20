@@ -1,5 +1,6 @@
 # Routines: what runs on its own, shown in the dashboard's Routines view. Every field but name is optional.
 # status: active | paused | planned   ·   doc: <repo>/<path> becomes a link, like an item's doc:
+# Quote a value that starts with *, or contains ": " or " #" (YAML reads " #" as a comment).
 - name: Tasker build
   description: Rebuilds this dashboard and TASKER.md, commits TASKER.md when an item changed
   schedule: on every push, and daily

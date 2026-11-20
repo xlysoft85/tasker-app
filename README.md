@@ -99,7 +99,7 @@ ran.
 ```yaml
 - name: Friday review
   description: What closed, what is stuck; writes next week's picks to FOCUS.md
-  schedule: "Fri 16:00"          # free text; quote anything that starts with * or contains ": "
+  schedule: "Fri 16:00"          # free text; quote a value that starts with *, or contains ": " or " #"
   runs_on: laptop, scheduled task
   account: personal agent        # free text: who or what it runs as
   status: active                 # active | paused | planned
@@ -107,7 +107,8 @@ ran.
 ```
 
 Only `name` is required, and `status` defaults to `active`. An unknown key, a bad status or a YAML
-error shows in the red *Format problems* box.
+error shows in the red *Format problems* box. YAML reads ` #` as the start of a comment, so an unquoted
+`description: drafts nudges for #waiting items` ends at "for". Quote such values.
 
 ## Quick start (GitHub Pages)
 
