@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-VERSION = "1.4.1"
+VERSION = "1.5.0"
 STATES = ["working", "next", "waiting", "watch", "someday"]
 ITEM_RE = re.compile(r"^- ([A-Z][A-Z0-9]*-\d+) #(\w+) (.+)$")
 ID_RE = re.compile(r"\b[A-Z][A-Z0-9]*-\d+\b")
@@ -271,7 +271,10 @@ def weekly_flow(closed, opened, today, start):
     return out
 
 
-FOCUS_RE = re.compile(r"^\d+\.\s+([A-Z][A-Z0-9]*-\d+)\s+—\s+(.+)$")
+# A pick is an item ID (WEB-3) or a project ID (WEB).
+FOCUS_RE = re.compile(r"^\d+\.\s+([A-Z][A-Z0-9]*(?:-\d+)?)\s+—\s+(.+)$")
+FOCUS_MAX = 3  # focus project cards on the board
+FOCUS_HISTORY = 10  # project modal: this many latest history entries of the project's items
 
 
 def load_focus(repo):
@@ -291,6 +294,43 @@ def load_focus(repo):
         elif line and not line.startswith("#"):
             notes.append(line)
     return head, picks, notes
+
+
+def resolve_focus(focus, projects, items, closed):
+    """FOCUS.md picks → (heading, [pick], notes), problems.
+
+    A pick is a dict: id, kind (item | project), outcome, when, done, item / proj.
+    An item pick is done when its line is gone (as before 1.5.0). A project pick is done when the
+    project has status: done, or is gone from projects.yaml while closed items of it are in the
+    git window (so it existed). Any other bare ID that is no registered project is a problem.
+    """
+    if focus is None:
+        return None, []
+    head, raw, notes = focus
+    reg = {p["id"]: p for p in projects if p.get("registered")}
+    existed = {c[1].rpartition("-")[0] for c in closed}
+    picks, problems = [], []
+    for pid, outcome, when in raw:
+        pick = {"id": pid, "outcome": outcome, "when": when}
+        if "-" in pid:
+            picks.append(dict(pick, kind="item", item=items.get(pid), done=pid not in items))
+            continue
+        p = reg.get(pid)
+        if p is None and pid not in existed:
+            problems.append(f"{CFG['focus']}: {pid} is not a project in projects.yaml "
+                            f"(a pick is an item ID like {pid}-1 or a project ID)")
+            continue
+        picks.append(dict(pick, kind="project", proj=p, done=p is None or p["status"] == "done"))
+    n = sum(1 for pk in picks if pk["kind"] == "project" and not pk["done"])
+    if n > FOCUS_MAX:
+        problems.append(f"{CFG['focus']}: {n} open project picks — the board shows the first {FOCUS_MAX}")
+    return (head, picks, notes), problems
+
+
+def doc_label(d):
+    """A doc's file name for a short link label: work:GTM/PLAN.md → PLAN.md."""
+    d = str(d).partition("#")[0].rstrip("/")
+    return d.rsplit("/", 1)[-1].rpartition(":")[2].strip() or d
 
 
 ROUTINE_KEYS = ("name", "description", "schedule", "runs_on", "account", "status", "doc")
@@ -397,24 +437,43 @@ def week_html(focus, weeks, items, today, start=None, known=frozenset()):
     parts = []
     if focus:
         head, picks, notes = focus
+        cards = {f["id"] for f in focus_cards(picks)}
         lis = []
-        for iid, outcome, when in picks:
-            it = items.get(iid)
-            if it is None:
-                st, info = "done", "line is gone — done"
+        for pk in picks:
+            iid, outcome, when, got = pk["id"], pk["outcome"], pk["when"], pk["done"]
+            name = ""
+            if pk["kind"] == "project":
+                p = pk["proj"]
+                name = f"<div class='pn'>{esc(p['name'] if p else iid)}</div>"
+                st, label = ("done", "✓") if got else ("working", "project")
+                if p is None:
+                    info = "project is gone from projects.yaml — done"
+                elif got:
+                    info = "project status: done"
+                else:
+                    n = len(p["items"])
+                    info = f"project · {n} open item{'' if n == 1 else 's'}"
+                    if p["status"] != "active":
+                        info += f" · {p['status']}"
+                ref = (f'<a href="#{esc(iid)}">{esc(iid)}</a>' if iid in cards else
+                       f"<s>{esc(iid)}</s>" if got else esc(iid))
             else:
-                st = it["state"]
-                info = f"#{st}"
-                if it["check"]:
-                    n = (it["check"] - today).days
-                    info += f" · check {days_txt(n)}"
-            ref = f'<a href="#{esc(iid)}">{esc(iid)}</a>' if it else f"<s>{esc(iid)}</s>"
+                it = pk["item"]
+                if it is None:
+                    st, label, info = "done", "✓", "line is gone — done"
+                else:
+                    st = label = it["state"]
+                    info = f"#{st}"
+                    if it["check"]:
+                        n = (it["check"] - today).days
+                        info += f" · check {days_txt(n)}"
+                ref = f'<a href="#{esc(iid)}">{esc(iid)}</a>' if it else f"<s>{esc(iid)}</s>"
             when_html = f"<div class='meta'>done when: {link_ids(when, items, known)}</div>" if when else ""
-            lis.append(f"<li class='pick{' got' if it is None else ''}'><div class='st {esc(st)}'>"
-                       f"{'✓' if it is None else esc(st)}</div><div><div class='t'>{link_ids(outcome, items, known)}</div>"
+            lis.append(f"<li class='pick{' got' if got else ''}'><div class='st {esc(st)}'>"
+                       f"{esc(label)}</div><div>{name}<div class='t'>{link_ids(outcome, items, known)}</div>"
                        f"{when_html}<div class='src'>{ref} · {esc(info)}</div></div></li>")
         note_html = "".join(f"<div class='meta'>{link_ids(n, items, known)}</div>" for n in notes)
-        got = sum(1 for p in picks if p[0] not in items)
+        got = sum(1 for p in picks if p["done"])
         parts.append(f"<div class='focus'><h2>This week <span class='meta'>{esc(head)}</span>"
                      f"<span class='pstatus'>{got} of {len(picks)} done</span></h2>"
                      f"<ul>{''.join(lis) or '<li><div></div><div class=meta>No picks.</div></li>'}</ul>{note_html}</div>")
@@ -514,7 +573,32 @@ def item_json(it, proj, today):
             "unblocked": bool(it.get("unblocked")), "nocheck": bool(it.get("nocheck"))}
 
 
-def board_json(projects, done, history, today, areas, has_git):
+def focus_cards(picks):
+    """The project picks that get a card on the board: open ones, the first FOCUS_MAX."""
+    return [pk["proj"] for pk in picks if pk["kind"] == "project" and not pk["done"]][:FOCUS_MAX]
+
+
+def focus_json(picks, done, history, today):
+    """One focus project card each: the week's outcome, open items by state, due count, project
+    docs, items closed this week (Mon–today) and the latest history of the project's items."""
+    by_pick = {pk["id"]: pk for pk in picks}
+    monday = str(today - dt.timedelta(days=today.weekday()))
+    out = []
+    for p in focus_cards(picks):
+        pk, pre = by_pick[p["id"]], p["id"] + "-"
+        hist = sorted(((*e, iid) for iid, h in history.items() if iid.startswith(pre) for e in h),
+                      key=lambda e: e[0], reverse=True)[:FOCUS_HISTORY]
+        out.append({"id": p["id"], "name": p["name"], "area": p["area"], "status": p["status"],
+                    "outcome": pk["outcome"], "when": pk["when"],
+                    "counts": {s: sum(1 for it in p["items"] if it["state"] == s) for s in STATES},
+                    "due": sum(1 for it in p["items"] if it.get("due")),
+                    "docs": [[doc_label(d), doc_href(d), str(d)] for d in p["docs"]],
+                    "closed": [i for d, i, _ in done if d >= monday and i.startswith(pre)],
+                    "hist": hist})
+    return out
+
+
+def board_json(projects, done, history, today, areas, has_git, focus=None):
     """Everything the board, the card modal and the Done drawer need, as one object."""
     by_id = {p["id"]: p for p in projects}
     items = [(p, it) for p in projects for it in p["items"]]
@@ -525,7 +609,8 @@ def board_json(projects, done, history, today, areas, has_git):
         pid = iid.rpartition("-")[0]
         proj = by_id.get(pid) or {"id": pid, "name": pid, "area": "?", "status": "done"}
         done_rows.append(dict(item_json(it, proj, today), date=d))
-    used = {p["id"] for p, _ in items} | {r["proj"] for r in done_rows}
+    cards = focus_json(focus[1], done, history, today) if focus else []
+    used = {p["id"] for p, _ in items} | {r["proj"] for r in done_rows} | {f["id"] for f in cards}
     order = {a: i for i, a in enumerate(areas)}
     lanes = sorted((p["id"] for p in projects if p["id"] in used),
                    key=lambda pid: order.get(by_id[pid]["area"], len(order)))
@@ -542,6 +627,7 @@ def board_json(projects, done, history, today, areas, has_git):
             "lanes": lanes,
             "items": [item_json(it, p, today) for p, it in items],
             "done": done_rows,
+            "focus": cards,
             "history": {i: h for i, h in history.items() if i in ids},
             "commitUrl": f"{str(src).rstrip('/')}/commit/" if src else ""}
 
@@ -599,7 +685,7 @@ def render_html(projects, items, problems, done, today, generated, pull_error,
     source = (f' from <a href="{esc(src["url"])}" target="_blank" rel="noopener">'
               f'{esc(src.get("name") or src["url"])}</a>') if src.get("url") else ""
     refresh = f'<meta http-equiv="refresh" content="{CFG["refresh"] * 60}">' if CFG["refresh"] else ""
-    data = board_json(projects, done, history or {}, today, chips[1:], has_git)
+    data = board_json(projects, done, history or {}, today, chips[1:], has_git, focus)
     subs = {"TITLE": esc(CFG["title"]), "VERSION": VERSION, "REFRESH": refresh,
             "DARK": DARK_VARS, "AREACSS": area_css(area_list(projects)), "SOURCE": source,
             "SCHEDULE": f" · {esc(CFG['schedule'])}" if CFG["schedule"] else "",
@@ -691,7 +777,8 @@ def main():
     history, closed, opened = scan_history(repo, items, today)
     start = repo_start(repo) if has_git else None
     done = recently_done(closed, today)
-    focus = load_focus(repo)
+    focus, focus_problems = resolve_focus(load_focus(repo), projects, items, closed)
+    problems += focus_problems
     # The stale warning compares the build time with the viewer's clock, so it is meaningless
     # for a page built with a fixed --today (the demo).
     stale = 0 if a.today else CFG["stale"]
@@ -800,6 +887,7 @@ li.w{color:var(--alert);font-size:12px;padding:2px 0}
 .week li:first-child{border-top:0}
 .pick .st{font-size:12px}
 .pick.got .t{text-decoration:line-through;text-decoration-color:var(--muted);color:var(--muted)}
+.pick .pn{font-size:11px;font-weight:600;color:var(--muted)}
 .flow svg{display:block;width:100%;height:auto;margin:2px 0 4px;overflow:visible}
 .flow .fo{fill:var(--c-open)} .flow .fc{fill:var(--c-closed)}
 .flow .gl{stroke:var(--line);stroke-width:1}
@@ -862,6 +950,17 @@ button.colh:hover{color:var(--done)}
 .ct{margin-top:3px;font-weight:500;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .c3{margin-top:3px;font-size:11.5px;color:var(--muted);overflow-wrap:anywhere}
 .c3>span+span::before{content:" · ";color:var(--muted);font-weight:400}
+/* Focus project cards: the week's project picks, at the top of Working */
+.fcard{border-left-color:var(--working);overflow:hidden;padding-top:0}
+.fcard.on{box-shadow:0 0 0 2px var(--working)}
+.fband{display:flex;gap:6px;align-items:center;margin:0 -9px 5px;padding:3px 9px;background:var(--chip);color:var(--a-ink);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+.fband .ftag{color:var(--working)}
+.fband .fa{margin-left:auto;font-weight:500}
+.fname{min-width:0;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fcard .ct{-webkit-line-clamp:4}
+.fcard a{position:relative;z-index:1}
+.fs.next{color:var(--next)} .fs.working{color:var(--working)} .fs.waiting{color:var(--waiting)} .fs.watch{color:var(--watch)}
+.fcard+.card:not(.fcard),.fcard+.empty{margin-top:12px}
 /* Group by project: one lane per project across the columns */
 .board.lanes{gap:0 10px}
 .board.lanes>.colh{border-bottom:2px solid var(--line);border-radius:0;background:var(--bg);padding:8px 2px 6px}
@@ -954,6 +1053,8 @@ a.gone{text-decoration-style:dotted}
   }
   D.items.forEach(function(it){prep(it,false);byId[it.id]=it;});
   D.done.forEach(function(it){prep(it,true);doneById[it.id]=it;});
+  var FOC=D.focus||[], focById={};
+  FOC.forEach(function(f){focById[f.id]=f;});
   function $(id){return document.getElementById(id);}
   var board=$("board"), box=$("q"), sel=$("proj"), dlg=$("card"), body=$("cardbody");
   var chips=[].slice.call(document.querySelectorAll("#areas button"));
@@ -1009,8 +1110,46 @@ a.gone{text-decoration-style:dotted}
     if(m.childNodes.length) c.appendChild(m);
     return c;
   }
+  // Focus project card: one per project pick in FOCUS.md, at the top of Working; follows the area chips.
+  function focusShown(){return FOC.filter(function(f){return S.area==="all"||f.area===S.area;});}
+  function countsLine(f,cls){
+    var m=el("div",cls), k=0;
+    KNOWN.slice(0,4).concat(["someday"]).forEach(function(s){
+      if(f.counts[s]){m.appendChild(el("span","fs "+s,f.counts[s]+" "+s)); k++;}
+    });
+    if(!k) m.appendChild(el("span",null,"no open items"));
+    if(f.due) m.appendChild(el("span","due",f.due+" due")).title="check date reached (today or overdue)";
+    return m;
+  }
+  function docLinks(f,cls){
+    var m=el("div",cls);
+    f.docs.forEach(function(d){var s=m.appendChild(el("span")); s.title=d[2]; s.appendChild(link(d[0],d[1]));});
+    return m;
+  }
+  function closedLine(f,cls){
+    var m=el("div",cls,"closed this week: ");
+    if(f.closed.length) idLinks(m,f.closed.join(", ")); else m.appendChild(document.createTextNode("none yet"));
+    return m;
+  }
+  function fcard(f){
+    var c=el("div","card fcard"+(S.proj===f.id?" on":"")+(f.status!=="active"?" paused":""));
+    c.tabIndex=0; c.setAttribute("role","button"); c.dataset.proj=f.id;
+    c.title="Focus project this week: show only its items, with the project's details";
+    var b=c.appendChild(el("div","fband ac")); b.dataset.a=f.area;
+    b.appendChild(el("span","ftag","Focus project"));
+    b.appendChild(el("span","fa",f.area));
+    var top=c.appendChild(el("div","c1"));
+    top.appendChild(el("span","cid",f.id));
+    top.appendChild(el("span","fname",f.name)).title=f.name;
+    idLinks(c.appendChild(el("div","ct")),f.outcome);
+    if(f.when) idLinks(c.appendChild(el("div","c3")),"done when: "+f.when);
+    c.appendChild(countsLine(f,"c3"));
+    if(f.docs.length) c.appendChild(docLinks(f,"c3"));
+    c.appendChild(closedLine(f,"c3"));
+    return c;
+  }
   function count(list,total){return list.length===total?String(total):list.length+" of "+total;}
-  function head(c,list,total){
+  function head(c,list,total,fs){
     var h=el(c.k==="done"?"button":"div","colh h-"+c.k);
     h.appendChild(el("i"));
     if(c.k==="done"){
@@ -1028,6 +1167,10 @@ a.gone{text-decoration-style:dotted}
       h.title="Work in progress: "+total+", limit "+D.wip+" (wip_limit in tasker.yaml)";
       if(total>D.wip) h.classList.add("over");
       if(list.length<total) h.appendChild(el("span","n","· "+list.length+" shown"));
+      if(FOC.length){
+        var fp=h.appendChild(el("span","sub",count(fs,FOC.length)+" focus project"+(FOC.length===1?"":"s")+" · not counted in WIP"));
+        fp.title="Project picks from FOCUS.md; the count above is items only";
+      }
     } else h.appendChild(el("span","n",count(list,total)));
     if(c.k==="blocked"){
       var w=list.filter(function(it){return it.st==="waiting";}).length;
@@ -1036,24 +1179,34 @@ a.gone{text-decoration-style:dotted}
     return h;
   }
   function render(){
-    var shown={}, total={}, n=0;
+    var shown={}, total={}, n=0, fs=focusShown();
     COLS.forEach(function(c){shown[c.k]=[];total[c.k]=0;});
     D.items.concat(D.done).forEach(function(it){total[it.col]++; if(match(it)) shown[it.col].push(it);});
     function live(c){return c.k!=="done"||doneOpen;}
     COLS.forEach(function(c){if(live(c)) n+=shown[c.k].length;});
     board.textContent="";
     board.className="board "+(S.lanes?"lanes":"cols")+(doneOpen?" open":"");
-    var heads=COLS.map(function(c){return head(c,shown[c.k],total[c.k]);});
+    var heads=COLS.map(function(c){return head(c,shown[c.k],total[c.k],fs);});
     if(!S.lanes){
       COLS.forEach(function(c,i){
         var col=board.appendChild(el("div","col c-"+c.k+(live(c)?"":" shut")+(heads[i].classList.contains("over")?" over":"")));
         col.appendChild(heads[i]);
         if(!live(c)) return;
+        if(c.k==="working") fs.forEach(function(f){col.appendChild(fcard(f));});
         shown[c.k].forEach(function(it){col.appendChild(card(it));});
         if(!shown[c.k].length) col.appendChild(el("div","empty",c.k==="done"?"Nothing closed in the last 7 days.":"—"));
       });
     }else{
       heads.forEach(function(h){board.appendChild(h);});
+      if(fs.length){
+        var fl=board.appendChild(el("div","lane")).appendChild(el("span","lt"));
+        fl.appendChild(el("span",null,"Focus projects"));
+        fl.appendChild(el("span","n","this week · from FOCUS.md"));
+        COLS.forEach(function(c){
+          var cell=board.appendChild(el("div","cell c-"+c.k));
+          if(c.k==="working") fs.forEach(function(f){cell.appendChild(fcard(f));});
+        });
+      }
       D.lanes.forEach(function(pid){
         var per=COLS.map(function(c){return live(c)?shown[c.k].filter(function(it){return it.proj===pid;}):[];});
         var k=per.reduce(function(a,l){return a+l.length;},0);
@@ -1158,18 +1311,60 @@ a.gone{text-decoration-style:dotted}
     dlg.scrollTop=0;
     if(decodeURIComponent(location.hash.slice(1))!==id) history.replaceState(null,"","#"+id);
   }
+  // Project modal (from a focus card): the card's details plus the latest history of its items.
+  function openProj(pid){
+    var f=focById[pid]; if(!f) return;
+    body.textContent="";
+    var mh=body.appendChild(el("div","mh"));
+    mh.appendChild(el("span","cid",f.id));
+    mh.appendChild(el("span","pill st working","focus project"));
+    var ap=mh.appendChild(el("span","cproj ac",f.area)); ap.dataset.a=f.area;
+    var x=mh.appendChild(el("button","x","×")); x.type="button"; x.title="Close (Esc)"; x.setAttribute("aria-label","Close");
+    x.onclick=function(){dlg.close();};
+    body.appendChild(el("h2",null,f.name));
+    idLinks(body.appendChild(el("p","mnote")),f.outcome);
+    var dl=body.appendChild(el("dl"));
+    if(f.when) row(dl,"Done when",idLinks(el("span"),f.when));
+    row(dl,"Open items",countsLine(f,"c3"));
+    row(dl,"Closed",closedLine(f,null));
+    if(f.status!=="active") row(dl,"Status",f.status);
+    if(f.docs.length) row(dl,"Project docs",docLinks(f,"c3"));
+    row(dl,"Board",S.proj===f.id?"filtered to "+f.id+" (project menu: All projects to clear)":"not filtered");
+    body.appendChild(el("h3",null,"History · latest changes to "+f.id+" items"));
+    if(!f.hist.length) body.appendChild(el("p","meta",D.git?"No commit changed a "+f.id+" item in the last "+D.historyDays+" days.":"No history: the data folder is not a git checkout."));
+    else{
+      var ol=body.appendChild(el("ul","hist"));
+      f.hist.forEach(function(e){  // [date, commit, subject, change, item id]
+        var li=ol.appendChild(el("li"));
+        li.appendChild(el("span","hd",e[0]));
+        var d=li.appendChild(el("div"));
+        d.appendChild(el("div",null,e[2]));
+        var m=d.appendChild(el("div","meta"));
+        idLinks(m,e[4]); m.appendChild(document.createTextNode(" · "+e[3]+" · "));
+        m.appendChild(link(e[1],D.commitUrl&&e[1]?D.commitUrl+e[1]:""));
+      });
+    }
+    if(!dlg.open) dlg.showModal();
+    dlg.scrollTop=0;
+    if(decodeURIComponent(location.hash.slice(1))!==pid) history.replaceState(null,"","#"+pid);
+  }
+  function pickProj(pid){S.proj=pid; apply(); openProj(pid);}
   dlg.addEventListener("close",function(){if(location.hash) history.replaceState(null,"",location.pathname+location.search);});
   dlg.addEventListener("click",function(e){  // a click on the backdrop closes it
     if(e.target!==dlg) return;
     var r=dlg.getBoundingClientRect();
     if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom) dlg.close();
   });
-  function fromHash(){var id=decodeURIComponent(location.hash.slice(1)); if(byId[id]||doneById[id]) open(id);}
+  function fromHash(){var id=decodeURIComponent(location.hash.slice(1)); if(byId[id]||doneById[id]) open(id); else if(focById[id]) openProj(id);}
   window.addEventListener("hashchange",fromHash);
-  board.addEventListener("click",function(e){var c=e.target.closest(".card"); if(c) open(c.dataset.id);});
+  function act(c){if(c.dataset.proj) pickProj(c.dataset.proj); else open(c.dataset.id);}
+  board.addEventListener("click",function(e){
+    if(e.target.closest("a")) return;  // a link inside a focus card goes where it points
+    var c=e.target.closest(".card"); if(c) act(c);
+  });
   board.addEventListener("keydown",function(e){
     var c=e.target.closest&&e.target.closest(".card");
-    if(c&&(e.key==="Enter"||e.key===" ")){e.preventDefault();open(c.dataset.id);}
+    if(c&&e.target===c&&(e.key==="Enter"||e.key===" ")){e.preventDefault();act(c);}
   });
 
   chips.forEach(function(b){b.onclick=function(){S.area=b.dataset.a;apply();};});

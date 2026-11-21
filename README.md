@@ -81,17 +81,29 @@ One static `index.html` with its CSS and JavaScript inline: no server, no CDN, n
   the flow numbers.
 - **Routines** view: what runs on its own, from `routines.yaml` (see below). Without that file the
   view is hidden.
-- **This week** shows the picks from `FOCUS.md`, each with its item's current state (a pick whose
-  line is gone counts as done), next to **opened vs closed** per week for the last eight weeks: paired
-  columns, a tooltip per week, and the same numbers as a table. A week with no git data (before the
-  repo's first commit, or no git checkout at all) is left empty rather than drawn as zero. The week
-  of the first commit counts every item in it as opened.
-  `FOCUS.md` format, three lines at most:
+- **This week** shows the picks from `FOCUS.md` next to **opened vs closed** per week for the last
+  eight weeks: paired columns, a tooltip per week, and the same numbers as a table. A week with no
+  git data (before the repo's first commit, or no git checkout at all) is left empty rather than
+  drawn as zero. The week of the first commit counts every item in it as opened.
+  `FOCUS.md` format, three lines at most. A pick is an **item** ID or a **project** ID, and one file
+  may mix both:
 
   ```
   # Focus — week of 2026-11-02
   1. WEB-3 — Redirect map ready · done when: all 140 old URLs map to a new page
+  2. PLAN — Q1 goals draft shared · done when: three outcomes with one owner each are on the page
   ```
+
+  - An **item pick** (`WEB-3`) shows its item's current state. It counts as done when its line is gone.
+  - A **project pick** (`PLAN`) must be a project in `projects.yaml`; an unknown one shows in the red
+    *Format problems* box. It shows the project's name and open item count, and counts as done only
+    when the project has `status: done` (or is gone from `projects.yaml` after its items closed).
+  - Each open project pick also gets a **focus project card** at the top of *Working* (three at
+    most): the week's outcome and *done when*, open items by state, how many are due, links to the
+    project's `docs:` (labelled by file name, linked like `doc:`), and the items of that project
+    closed this week. The cards follow the area chips. Click one to filter the board to that project
+    and open its details with the latest history of its items (also `…/#PLAN`). The *Working*
+    count stays items only; the projects are counted on their own line under it.
 - **Theme** follows the system. The button in the corner cycles *Auto → Light → Dark*, and each
   browser remembers the choice.
 - The header shows how old the page is; with `stale_minutes` set, a red bar says the build has stopped.
@@ -163,7 +175,7 @@ to change the script that runs on your build host. Install a tagged release of t
 update it on purpose:
 
 ```bash
-git clone --branch v1.4.0 https://github.com/xlysoft85/tasker-app /opt/tasker
+git clone --branch v1.5.0 https://github.com/xlysoft85/tasker-app /opt/tasker
 ```
 
 ## Configuration
