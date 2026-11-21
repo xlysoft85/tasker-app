@@ -104,6 +104,10 @@ One static `index.html` with its CSS and JavaScript inline: no server, no CDN, n
     closed this week. The cards follow the area chips. Click one to filter the board to that project
     and open its details with the latest history of its items (also `…/#PLAN`). The *Working*
     count stays items only; the projects are counted on their own line under it.
+  - An outcome may end with `(items: PLAN-1, PLAN-3)`. The list is taken out of the outcome text and
+    shown as item links on the card and in *This week*.
+  - Lines that are not numbered picks are notes. A note starting `Next up:` also shows as a muted
+    line under the focus project cards.
 - **Theme** follows the system. The button in the corner cycles *Auto → Light → Dark*, and each
   browser remembers the choice.
 - The header shows how old the page is; with `stale_minutes` set, a red bar says the build has stopped.

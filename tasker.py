@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 STATES = ["working", "next", "waiting", "watch", "someday"]
 ITEM_RE = re.compile(r"^- ([A-Z][A-Z0-9]*-\d+) #(\w+) (.+)$")
 ID_RE = re.compile(r"\b[A-Z][A-Z0-9]*-\d+\b")
@@ -274,6 +274,7 @@ def weekly_flow(closed, opened, today, start):
 # A pick is an item ID (WEB-3) or a project ID (WEB).
 FOCUS_RE = re.compile(r"^\d+\.\s+([A-Z][A-Z0-9]*(?:-\d+)?)\s+—\s+(.+)$")
 FOCUS_MAX = 3  # focus project cards on the board
+FOCUS_ITEMS_RE = re.compile(r"\s*\(items:\s*([^)]*)\)")  # optional "(items: FDB-11, FDB-15)" in an outcome
 FOCUS_HISTORY = 10  # project modal: this many latest history entries of the project's items
 
 
@@ -311,7 +312,9 @@ def resolve_focus(focus, projects, items, closed):
     existed = {c[1].rpartition("-")[0] for c in closed}
     picks, problems = [], []
     for pid, outcome, when in raw:
-        pick = {"id": pid, "outcome": outcome, "when": when}
+        m = FOCUS_ITEMS_RE.search(outcome)
+        pick = {"id": pid, "outcome": FOCUS_ITEMS_RE.sub("", outcome, count=1).strip(), "when": when,
+                "items": ID_RE.findall(m.group(1)) if m else []}
         if "-" in pid:
             picks.append(dict(pick, kind="item", item=items.get(pid), done=pid not in items))
             continue
@@ -469,9 +472,13 @@ def week_html(focus, weeks, items, today, start=None, known=frozenset()):
                         info += f" · check {days_txt(n)}"
                 ref = f'<a href="#{esc(iid)}">{esc(iid)}</a>' if it else f"<s>{esc(iid)}</s>"
             when_html = f"<div class='meta'>done when: {link_ids(when, items, known)}</div>" if when else ""
+            if pk["items"]:
+                info_html = esc(info) + " · items: " + link_ids(", ".join(pk["items"]), items, known)
+            else:
+                info_html = esc(info)
             lis.append(f"<li class='pick{' got' if got else ''}'><div class='st {esc(st)}'>"
                        f"{esc(label)}</div><div>{name}<div class='t'>{link_ids(outcome, items, known)}</div>"
-                       f"{when_html}<div class='src'>{ref} · {esc(info)}</div></div></li>")
+                       f"{when_html}<div class='src'>{ref} · {info_html}</div></div></li>")
         note_html = "".join(f"<div class='meta'>{link_ids(n, items, known)}</div>" for n in notes)
         got = sum(1 for p in picks if p["done"])
         parts.append(f"<div class='focus'><h2>This week <span class='meta'>{esc(head)}</span>"
@@ -589,7 +596,7 @@ def focus_json(picks, done, history, today):
         hist = sorted(((*e, iid) for iid, h in history.items() if iid.startswith(pre) for e in h),
                       key=lambda e: e[0], reverse=True)[:FOCUS_HISTORY]
         out.append({"id": p["id"], "name": p["name"], "area": p["area"], "status": p["status"],
-                    "outcome": pk["outcome"], "when": pk["when"],
+                    "outcome": pk["outcome"], "when": pk["when"], "items": pk["items"],
                     "counts": {s: sum(1 for it in p["items"] if it["state"] == s) for s in STATES},
                     "due": sum(1 for it in p["items"] if it.get("due")),
                     "docs": [[doc_label(d), doc_href(d), str(d)] for d in p["docs"]],
@@ -628,6 +635,7 @@ def board_json(projects, done, history, today, areas, has_git, focus=None):
             "items": [item_json(it, p, today) for p, it in items],
             "done": done_rows,
             "focus": cards,
+            "nextUp": [n for n in (focus[2] if focus else []) if n.lower().startswith("next up:")],
             "history": {i: h for i, h in history.items() if i in ids},
             "commitUrl": f"{str(src).rstrip('/')}/commit/" if src else ""}
 
@@ -960,7 +968,8 @@ button.colh:hover{color:var(--done)}
 .fcard .ct{-webkit-line-clamp:4}
 .fcard a{position:relative;z-index:1}
 .fs.next{color:var(--next)} .fs.working{color:var(--working)} .fs.waiting{color:var(--waiting)} .fs.watch{color:var(--watch)}
-.fcard+.card:not(.fcard),.fcard+.empty{margin-top:12px}
+.fcard+.card:not(.fcard),.fcard+.empty,.fnext+.card,.fnext+.empty{margin-top:12px}
+.fnext{margin:6px 4px 0;font-size:11.5px;color:var(--muted);overflow-wrap:anywhere}
 /* Group by project: one lane per project across the columns */
 .board.lanes{gap:0 10px}
 .board.lanes>.colh{border-bottom:2px solid var(--line);border-radius:0;background:var(--bg);padding:8px 2px 6px}
@@ -1143,10 +1152,14 @@ a.gone{text-decoration-style:dotted}
     top.appendChild(el("span","fname",f.name)).title=f.name;
     idLinks(c.appendChild(el("div","ct")),f.outcome);
     if(f.when) idLinks(c.appendChild(el("div","c3")),"done when: "+f.when);
+    if(f.items.length) idLinks(c.appendChild(el("div","c3 fitems")),"items: "+f.items.join(", "));
     c.appendChild(countsLine(f,"c3"));
     if(f.docs.length) c.appendChild(docLinks(f,"c3"));
     c.appendChild(closedLine(f,"c3"));
     return c;
+  }
+  function nextUp(parent){  // "Next up: …" note lines of FOCUS.md, muted, under the focus cards
+    (D.nextUp||[]).forEach(function(n){idLinks(parent.appendChild(el("div","fnext")),n);});
   }
   function count(list,total){return list.length===total?String(total):list.length+" of "+total;}
   function head(c,list,total,fs){
@@ -1192,7 +1205,7 @@ a.gone{text-decoration-style:dotted}
         var col=board.appendChild(el("div","col c-"+c.k+(live(c)?"":" shut")+(heads[i].classList.contains("over")?" over":"")));
         col.appendChild(heads[i]);
         if(!live(c)) return;
-        if(c.k==="working") fs.forEach(function(f){col.appendChild(fcard(f));});
+        if(c.k==="working"&&fs.length){fs.forEach(function(f){col.appendChild(fcard(f));}); nextUp(col);}
         shown[c.k].forEach(function(it){col.appendChild(card(it));});
         if(!shown[c.k].length) col.appendChild(el("div","empty",c.k==="done"?"Nothing closed in the last 7 days.":"—"));
       });
@@ -1204,7 +1217,7 @@ a.gone{text-decoration-style:dotted}
         fl.appendChild(el("span","n","this week · from FOCUS.md"));
         COLS.forEach(function(c){
           var cell=board.appendChild(el("div","cell c-"+c.k));
-          if(c.k==="working") fs.forEach(function(f){cell.appendChild(fcard(f));});
+          if(c.k==="working"){fs.forEach(function(f){cell.appendChild(fcard(f));}); nextUp(cell);}
         });
       }
       D.lanes.forEach(function(pid){
@@ -1325,6 +1338,7 @@ a.gone{text-decoration-style:dotted}
     idLinks(body.appendChild(el("p","mnote")),f.outcome);
     var dl=body.appendChild(el("dl"));
     if(f.when) row(dl,"Done when",idLinks(el("span"),f.when));
+    if(f.items.length) row(dl,"Items",idLinks(el("span"),f.items.join(", ")));
     row(dl,"Open items",countsLine(f,"c3"));
     row(dl,"Closed",closedLine(f,null));
     if(f.status!=="active") row(dl,"Status",f.status);
