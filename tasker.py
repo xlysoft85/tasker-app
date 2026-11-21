@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 STATES = ["working", "next", "waiting", "watch", "someday"]
 ITEM_RE = re.compile(r"^- ([A-Z][A-Z0-9]*-\d+) #(\w+) (.+)$")
 ID_RE = re.compile(r"\b[A-Z][A-Z0-9]*-\d+\b")
@@ -144,7 +144,8 @@ def load(repo):
         if CFG["areas"] and p.get("area") not in CFG["areas"]:
             problems.append(f"projects.yaml: {pid} unknown area '{p.get('area')}'")
         proj = {"id": pid, "name": p.get("name", pid), "area": p.get("area", "?"),
-                "status": p.get("status", "active"), "docs": p.get("docs") or [], "items": []}
+                "status": p.get("status", "active"), "docs": p.get("docs") or [], "items": [],
+                "registered": True}
         projects.append(proj)
         by_id[pid] = proj
     files = sorted((repo / "projects").glob("*.md"))
@@ -323,12 +324,24 @@ def load_routines(repo):
     return routines, problems
 
 
+def registered(projects):
+    """Project IDs from projects.yaml. Only IDs with one of these prefixes are Tasker items."""
+    return {p["id"] for p in projects if p.get("registered")}
+
+
+def item_refs(text, known):
+    """Tasker item IDs in a text. Jira keys and other ABC-123 strings whose prefix is not a
+    registered project are not items, so they never count as done."""
+    return [r for r in ID_RE.findall(text) if r.rpartition("-")[0] in known]
+
+
 def annotate(projects, items, today):
-    """Flags per item: due (check date reached), unblocked (every on: ID is gone)."""
+    """Flags per item: due (check date reached), unblocked (every on: item ID is gone)."""
+    known = registered(projects)
     for p in projects:
         for it in p["items"]:
             it["due"] = bool(it["check"] and it["check"] <= today)
-            refs = ID_RE.findall(it["on"])
+            refs = item_refs(it["on"], known)
             it["refs"] = refs
             it["unblocked"] = bool(it["state"] == "waiting" and refs
                                    and all(r not in items for r in refs))
@@ -362,12 +375,14 @@ def doc_link(d):
     return f'<a href="{esc(href)}" target="_blank" rel="noopener">{esc(d)}</a>' if href else esc(d)
 
 
-def link_ids(text, items):
+def link_ids(text, items, known):
+    """Item IDs become links; gone ones are struck. Other ABC-123 strings (Jira keys) stay text."""
     out, pos = [], 0
     for m in ID_RE.finditer(text):
         out.append(esc(text[pos:m.start()]))
         i = m.group(0)
-        out.append(f'<a href="#{esc(i)}">{esc(i)}</a>' if i in items else f'<s title="done">{esc(i)}</s>')
+        out.append(f'<a href="#{esc(i)}">{esc(i)}</a>' if i in items else
+                   f'<s title="done">{esc(i)}</s>' if i.rpartition("-")[0] in known else esc(i))
         pos = m.end()
     out.append(esc(text[pos:]))
     return "".join(out)
@@ -377,7 +392,7 @@ def days_txt(n):
     return "today" if n == 0 else (f"in {n} d" if n > 0 else f"{-n} d overdue")
 
 
-def week_html(focus, weeks, items, today, start=None):
+def week_html(focus, weeks, items, today, start=None, known=frozenset()):
     """The 'This week' strip: FOCUS.md picks with their live state, and opened vs closed per week."""
     parts = []
     if focus:
@@ -394,11 +409,11 @@ def week_html(focus, weeks, items, today, start=None):
                     n = (it["check"] - today).days
                     info += f" · check {days_txt(n)}"
             ref = f'<a href="#{esc(iid)}">{esc(iid)}</a>' if it else f"<s>{esc(iid)}</s>"
-            when_html = f"<div class='meta'>done when: {link_ids(when, items)}</div>" if when else ""
+            when_html = f"<div class='meta'>done when: {link_ids(when, items, known)}</div>" if when else ""
             lis.append(f"<li class='pick{' got' if it is None else ''}'><div class='st {esc(st)}'>"
-                       f"{'✓' if it is None else esc(st)}</div><div><div class='t'>{link_ids(outcome, items)}</div>"
+                       f"{'✓' if it is None else esc(st)}</div><div><div class='t'>{link_ids(outcome, items, known)}</div>"
                        f"{when_html}<div class='src'>{ref} · {esc(info)}</div></div></li>")
-        note_html = "".join(f"<div class='meta'>{link_ids(n, items)}</div>" for n in notes)
+        note_html = "".join(f"<div class='meta'>{link_ids(n, items, known)}</div>" for n in notes)
         got = sum(1 for p in picks if p[0] not in items)
         parts.append(f"<div class='focus'><h2>This week <span class='meta'>{esc(head)}</span>"
                      f"<span class='pstatus'>{got} of {len(picks)} done</span></h2>"
@@ -523,6 +538,7 @@ def board_json(projects, done, history, today, areas, has_git):
             "projects": {p["id"]: {"name": p["name"], "area": p["area"], "status": p["status"],
                                    "docs": [[str(d), doc_href(d)] for d in p["docs"]]}
                          for p in projects},
+            "known": sorted(registered(projects)),
             "lanes": lanes,
             "items": [item_json(it, p, today) for p, it in items],
             "done": done_rows,
@@ -588,7 +604,7 @@ def render_html(projects, items, problems, done, today, generated, pull_error,
             "DARK": DARK_VARS, "AREACSS": area_css(area_list(projects)), "SOURCE": source,
             "SCHEDULE": f" · {esc(CFG['schedule'])}" if CFG["schedule"] else "",
             "GENERATED": esc(generated), "BUILT": str(int(built)), "STALE": str(int(stale)),
-            "WEEK": week_html(focus, weeks, items, today, start) if weeks else "",
+            "WEEK": week_html(focus, weeks, items, today, start, registered(projects)) if weeks else "",
             "WARN": warn_html, "VIEWS": views, "FILTERS": filt,
             "OPENEDNOW": "—" if not weeks or weeks[-1][2] is None else str(weeks[-1][2]),
             "CLOSEDNOW": "—" if not weeks or weeks[-1][3] is None else str(weeks[-1][3]),
@@ -960,12 +976,13 @@ a.gone{text-decoration-style:dotted}
     var a=el("a",null,text); a.href=href; a.target="_blank"; a.rel="noopener"; return a;
   }
   function idLinks(parent,text){  // item IDs in a text become links to their card; gone ones are struck
-    var re=/\b[A-Z][A-Z0-9]*-\d+\b/g, pos=0, m;
+    var re=/\b[A-Z][A-Z0-9]*-\d+\b/g, pos=0, m;  // an ID whose prefix is no registered project (a Jira key) stays text
     while((m=re.exec(text))){
       parent.appendChild(document.createTextNode(text.slice(pos,m.index)));
       var id=m[0], a;
       if(byId[id]||doneById[id]){a=el("a",doneById[id]?"gone":null,id);a.href="#"+id;}
-      else{a=el("s",null,id);a.title="done";}
+      else if(D.known.indexOf(id.replace(/-\d+$/,""))>=0){a=el("s",null,id);a.title="done";}
+      else a=document.createTextNode(id);
       parent.appendChild(a); pos=m.index+id.length;
     }
     parent.appendChild(document.createTextNode(text.slice(pos)));

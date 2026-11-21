@@ -45,7 +45,8 @@ can come in any order. Indented lines under an item make a short sub-list.
 
 - **`check:`** is the date to look again. On that date the item moves to *Needs you now*.
 - **`on:`** names what it waits on. When it names other item IDs (`on:WEB-1, WEB-3`) and all of them
-  are gone, the item shows as **unblocked**.
+  are gone, the item shows as **unblocked**. Only IDs whose prefix is a project in `projects.yaml`
+  count: a ticket key from another tool (`on:SUP-4412`) is just text and never unblocks the item.
 - **IDs** are `<PROJECT>-<n>`. Take the highest number in the file + 1 and never renumber.
 - **Finished → delete the line.**
 
