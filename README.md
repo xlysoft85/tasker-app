@@ -206,9 +206,10 @@ error shows in the red *Format problems* box. YAML reads ` #` as the start of a 
    week's `FOCUS.md` (or delete it), and push.
 
 The included workflow ([`example/.github/workflows/tasker.yml`](example/.github/workflows/tasker.yml))
-uses this repo as an action, pinned to `@v1`. It rebuilds when the items, `projects.yaml` or
-`tasker.yaml` change and once a day, publishes the page and commits `TASKER.md` back when an item
-changed. To pick up a newer Tasker, change the tag.
+uses this repo as an action, pinned to `@v1`. It rebuilds on every push to the files Tasker reads
+(`projects/`, `projects.yaml`, `tasker.yaml`, `FOCUS.md`, `routines.yaml`) and once a day, publishes
+the page and commits `TASKER.md` back when an item changed. If `tasker.yaml` renames the focus or
+routines file, change the workflow's `paths:` to match. To pick up a newer Tasker, change the tag.
 
 > **Private items?** GitHub Pages on a private repo needs a paid plan, and the page is still public
 > unless you're on Enterprise Cloud. If that doesn't suit you, keep the repo private, delete the two

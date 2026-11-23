@@ -1,9 +1,10 @@
-# Rebuild the dashboard on every change to the items, and once a day so check dates come due.
+# Rebuild the dashboard on every push that changes a file Tasker reads, and once a day so check
+# dates come due. If tasker.yaml renames the focus or routines file, rename it here too.
 name: Tasker
 on:
   push:
     branches: [main]
-    paths: [projects/**, projects.yaml, tasker.yaml]
+    paths: [projects/**, projects.yaml, tasker.yaml, FOCUS.md, routines.yaml]
   schedule:
     - cron: "0 5 * * *"
   workflow_dispatch:
