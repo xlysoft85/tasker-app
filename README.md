@@ -119,7 +119,10 @@ One static `index.html` with its CSS and JavaScript inline: no server, no CDN, n
 
     The cards follow the area chips. Click one to filter the board to that project and open its
     details (progress, activity, closed, open items) with the latest history of its items (also
-    `…/#PLAN`). Without a git checkout there is no history, so no activity chip and no bar.
+    `…/#PLAN`). Above that history, **Items · n of m done** lists the pick's `(items: …)` with
+    their titles, state and check date (open first, then done ones struck through with
+    `done <date>`, then IDs that never existed as `unknown ID`).
+    Without a git checkout there is no history, so no activity chip and no bar.
 
     ```
     FOCUS PROJECT                                       work

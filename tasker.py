@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 STATES = ["working", "next", "waiting", "watch", "someday"]
 ITEM_RE = re.compile(r"^- ([A-Z][A-Z0-9]*-\d+) #(\w+) (.+)$")
 ID_RE = re.compile(r"\b[A-Z][A-Z0-9]*-\d+\b")
@@ -188,7 +188,7 @@ HISTORY_MAX = 40  # … at most this many per item
 
 
 def scan_history(repo, current_ids, today):
-    """One `git log -p` pass over projects/ → (history, closed, opened).
+    """One `git log -p` pass over projects/ → (history, closed, opened, gone).
 
     history: id → [(date, short hash, subject, change)], newest first, last HISTORY_DAYS days.
     closed: [(date, id, item)] of items whose line was deleted (the ID is gone everywhere) since
@@ -196,7 +196,8 @@ def scan_history(repo, current_ids, today):
     opened: id → date its line was first added, for IDs first added since that Monday. "First
     added" = the oldest commit in the scan that touches the ID adds its line without removing
     one, so an edit or a move between files is not an opening.
-    Outside a git repo all three are empty.
+    gone: id → (date, item) like closed, for every item deleted in the whole scan window.
+    Outside a git repo all four are empty.
     """
     weeks_since = today - dt.timedelta(days=today.weekday() + 7 * (WEEKS - 1))
     since = min(today - dt.timedelta(days=HISTORY_DAYS), weeks_since)
@@ -229,14 +230,13 @@ def scan_history(repo, current_ids, today):
                 continue
             iid, state = m.group(1), m.group(2)
             (old if line[0] == "-" else new).setdefault(iid, state)
-            if (line[0] == "-" and iid not in current_ids and iid not in done
-                    and commit[1] >= str(weeks_since)):
+            if line[0] == "-" and iid not in current_ids and iid not in done:
                 done[iid] = (commit[1], parse_item(m, [], ""))
     flush()
-    closed = sorted(((d, i, it) for i, (d, it) in done.items()), key=lambda c: (c[0], c[1]),
-                    reverse=True)
+    closed = sorted(((d, i, it) for i, (d, it) in done.items() if d >= str(weeks_since)),
+                    key=lambda c: (c[0], c[1]), reverse=True)
     opened = {i: d for i, (d, added) in first.items() if added and d >= str(weeks_since)}
-    return history, closed, opened
+    return history, closed, opened, done
 
 
 def repo_start(repo):
@@ -329,22 +329,35 @@ def resolve_focus(focus, projects, items, closed):
     return (head, picks, notes), problems
 
 
-def focus_progress(focus, items, history, today):
+def focus_progress(focus, items, history, today, gone=None):
     """Per project pick, from git history: prog = (done IDs, open IDs) of its `(items: …)` list, or
-    None without a list; last = date of the latest change to any of the project's item lines (None
-    if none in the history window), ago = days since then.
+    None without a list; rows = one row per listed ID for the project modal (open ones in list
+    order, then done ones, then unknown ones); last = date of the latest change to any of the
+    project's item lines (None if none in the history window), ago = days since then.
 
     Done = the line was deleted: the ID is gone from every file and has history. A listed ID that
-    is neither open nor in the history window (a typo, or closed long ago) is left out.
+    is neither open nor in the history window (a typo, or closed long ago) is left out of prog
+    and gets an "unknown" row.
     """
+    gone = gone or {}
     for pk in (focus[1] if focus else []):
         if pk["kind"] != "project":
             continue
-        pk["prog"] = None
+        pk["prog"], pk["rows"] = None, []
         if pk["items"]:
             ids = list(dict.fromkeys(pk["items"]))
             pk["prog"] = ([i for i in ids if i not in items and history.get(i)],
                           [i for i in ids if i in items])
+            for i in pk["prog"][1]:
+                it = items[i]
+                pk["rows"].append({"id": i, "st": it["state"], "title": it["title"], "on": it["on"],
+                                   "check": str(it["check"]) if it["check"] else None,
+                                   "days": (it["check"] - today).days if it["check"] else None})
+            for i in pk["prog"][0]:
+                d, it = gone.get(i, (history[i][0][0], None))
+                pk["rows"].append({"id": i, "done": d, "title": it["title"] if it else ""})
+            pk["rows"] += [{"id": i, "unknown": True} for i in ids
+                           if i not in items and not history.get(i)]
         pre = pk["id"] + "-"
         dates = [e[0] for iid, h in history.items() if iid.startswith(pre) for e in h]
         pk["last"] = max(dates) if dates else None
@@ -629,6 +642,7 @@ def focus_json(picks, done, history, today):
         out.append({"id": p["id"], "name": p["name"], "area": p["area"], "status": p["status"],
                     "outcome": pk["outcome"], "when": pk["when"], "items": pk["items"],
                     "prog": ({"done": pk["prog"][0], "open": pk["prog"][1]} if pk.get("prog") else None),
+                    "rows": pk.get("rows") or [],
                     "last": pk.get("last"), "ago": pk.get("ago"),
                     "counts": {s: sum(1 for it in p["items"] if it["state"] == s) for s in STATES},
                     "due": sum(1 for it in p["items"] if it.get("due")),
@@ -815,12 +829,12 @@ def main():
     annotate(projects, items, today)
     # History is read even with --no-git (it only reads); outside a git repo it is empty.
     has_git = bool(git(repo, "rev-parse", "--git-dir", check=False).strip())
-    history, closed, opened = scan_history(repo, items, today)
+    history, closed, opened, gone = scan_history(repo, items, today)
     start = repo_start(repo) if has_git else None
     done = recently_done(closed, today)
     focus, focus_problems = resolve_focus(load_focus(repo), projects, items, closed)
     problems += focus_problems
-    focus_progress(focus, items, history, today)
+    focus_progress(focus, items, history, today, gone)
     # The stale warning compares the build time with the viewer's clock, so it is meaningless
     # for a page built with a fixed --today (the demo).
     stale = 0 if a.today else CFG["stale"]
@@ -1044,6 +1058,11 @@ dialog::backdrop{background:rgba(0,0,0,.5)}
 .hist li:first-child{border-top:0}
 .hist .hd{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--muted);padding-top:1px}
 a.gone{text-decoration-style:dotted}
+.fitemlist .meta{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;margin-top:2px}
+.fitemlist .pill{font-size:11px;padding:0 7px}
+.fitemlist .it{display:block}
+.fitemlist .idone .it{color:var(--muted)}
+.fitemlist .ion{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Routines */
 .routines .rrow{display:grid;grid-template-columns:minmax(0,2.4fr) minmax(0,1.2fr) minmax(0,1.2fr) minmax(0,.8fr) 86px;gap:12px;padding:9px 0;border-top:1px solid var(--line);align-items:start;font-size:13px}
 .routines .rhead{border-top:0;padding:2px 0 6px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
@@ -1396,7 +1415,6 @@ a.gone{text-decoration-style:dotted}
     idLinks(body.appendChild(el("p","mnote")),f.outcome);
     var dl=body.appendChild(el("dl"));
     if(f.when) row(dl,"Done when",idLinks(el("span"),f.when));
-    if(f.items.length) row(dl,"Items",idLinks(el("span"),f.items.join(", ")));
     var pb=progBar(f); if(pb) row(dl,"Progress",pb);
     var a=actChip(f); if(a) row(dl,"Activity",a);
     row(dl,"Closed",closedLine(f,null));
@@ -1404,6 +1422,26 @@ a.gone{text-decoration-style:dotted}
     if(f.status!=="active") row(dl,"Status",f.status);
     if(f.docs.length) row(dl,"Project docs",docLinks(f,"c3"));
     row(dl,"Board",S.proj===f.id?"filtered to "+f.id+" (project menu: All projects to clear)":"not filtered");
+    if(f.rows.length){  // the pick's (items: …) list with titles: open first, then done, then unknown IDs
+      var pg=f.prog||{done:[],open:[]};
+      body.appendChild(el("h3",null,"Items · "+pg.done.length+" of "+(pg.done.length+pg.open.length)+" done"));
+      var il=body.appendChild(el("ul","hist fitemlist"));
+      f.rows.forEach(function(r){
+        var li=il.appendChild(el("li",r.done?"idone":(r.unknown?"iunk":null)));
+        var h=li.appendChild(el("span","hd"));
+        if(r.unknown) h.textContent=r.id; else{var a=h.appendChild(el("a",r.done?"gone":null,r.id)); a.href="#"+r.id;}
+        var d=li.appendChild(el("div"));
+        if(r.unknown){d.appendChild(el("div","meta","unknown ID")).title="not an open item and no history in the last "+D.historyDays+" days (a typo, or closed long ago)"; return;}
+        d.appendChild(el(r.done?"s":"div","it",r.title||"(line deleted)"));
+        var m=d.appendChild(el("div","meta"));
+        if(r.done) m.appendChild(el("span","pill st done","done "+r.done));
+        else{
+          m.appendChild(el("span","pill st "+r.st,r.st));
+          if(r.check) m.appendChild(el("span",r.days<=0?"due":(r.days<=3?"soon":null),"check "+r.check+" · "+daysTxt(r.days)));
+          if(r.st==="waiting"&&r.on){var o=m.appendChild(el("span","ion")); idLinks(o,"on: "+r.on);}
+        }
+      });
+    }
     body.appendChild(el("h3",null,"History · latest changes to "+f.id+" items"));
     if(!f.hist.length) body.appendChild(el("p","meta",D.git?"No commit changed a "+f.id+" item in the last "+D.historyDays+" days.":"No history: the data folder is not a git checkout."));
     else{
