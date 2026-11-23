@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-VERSION = "1.5.1"
+VERSION = "1.6.0"
 STATES = ["working", "next", "waiting", "watch", "someday"]
 ITEM_RE = re.compile(r"^- ([A-Z][A-Z0-9]*-\d+) #(\w+) (.+)$")
 ID_RE = re.compile(r"\b[A-Z][A-Z0-9]*-\d+\b")
@@ -52,10 +52,8 @@ def load_config(repo):
     source = raw.get("source") or {}
     if isinstance(source, str):
         source = {"name": source.removeprefix("https://github.com/"), "url": source}
-    wip = raw.get("wip_limit", 5)
-    if isinstance(wip, bool) or not isinstance(wip, int) or wip < 1:
-        problems.append(f"tasker.yaml: wip_limit '{wip}' — use a whole number, 1 or more")
-        wip = 5
+    # wip_limit (up to 1.5.x: the Working column's item limit) is ignored since 1.6.0: the limit is
+    # the focus projects. A tasker.yaml that still has it is fine.
     default_area = str(raw.get("default_area") or "all")
     if default_area != "all" and areas and default_area not in areas:
         problems.append(f"tasker.yaml: default_area '{default_area}' — use all or one of the areas")
@@ -66,7 +64,7 @@ def load_config(repo):
             "stale": int(raw.get("stale_minutes", 0) or 0),
             "focus": str(raw.get("focus") or "FOCUS.md"),
             "routines": str(raw.get("routines") or "routines.yaml"),
-            "wip": wip, "default_area": default_area,
+            "default_area": default_area,
             "commit": raw.get("commit") or {}}, problems
 
 
@@ -276,6 +274,7 @@ FOCUS_RE = re.compile(r"^\d+\.\s+([A-Z][A-Z0-9]*(?:-\d+)?)\s+—\s+(.+)$")
 FOCUS_MAX = 3  # focus project cards on the board
 FOCUS_ITEMS_RE = re.compile(r"\s*\(items:\s*([^)]*)\)")  # optional "(items: FDB-11, FDB-15)" in an outcome
 FOCUS_HISTORY = 10  # project modal: this many latest history entries of the project's items
+ACTIVE_DAYS = 2  # a focus project is active when one of its item lines changed this many days ago or less
 
 
 def load_focus(repo):
@@ -328,6 +327,34 @@ def resolve_focus(focus, projects, items, closed):
     if n > FOCUS_MAX:
         problems.append(f"{CFG['focus']}: {n} open project picks — the board shows the first {FOCUS_MAX}")
     return (head, picks, notes), problems
+
+
+def focus_progress(focus, items, history, today):
+    """Per project pick, from git history: prog = (done IDs, open IDs) of its `(items: …)` list, or
+    None without a list; last = date of the latest change to any of the project's item lines (None
+    if none in the history window), ago = days since then.
+
+    Done = the line was deleted: the ID is gone from every file and has history. A listed ID that
+    is neither open nor in the history window (a typo, or closed long ago) is left out.
+    """
+    for pk in (focus[1] if focus else []):
+        if pk["kind"] != "project":
+            continue
+        pk["prog"] = None
+        if pk["items"]:
+            ids = list(dict.fromkeys(pk["items"]))
+            pk["prog"] = ([i for i in ids if i not in items and history.get(i)],
+                          [i for i in ids if i in items])
+        pre = pk["id"] + "-"
+        dates = [e[0] for iid, h in history.items() if iid.startswith(pre) for e in h]
+        pk["last"] = max(dates) if dates else None
+        pk["ago"] = (today - dt.date.fromisoformat(pk["last"])).days if dates else None
+
+
+def prog_txt(prog):
+    """(done, open) → 'n of m done', or '' when nothing countable is listed."""
+    m = len(prog[0]) + len(prog[1]) if prog else 0
+    return f"{len(prog[0])} of {m} done" if m else ""
 
 
 def doc_label(d):
@@ -447,7 +474,10 @@ def week_html(focus, weeks, items, today, start=None, known=frozenset()):
             name = ""
             if pk["kind"] == "project":
                 p = pk["proj"]
-                name = f"<div class='pn'>{esc(p['name'] if p else iid)}</div>"
+                pt = prog_txt(pk.get("prog"))
+                pt = (f" <span class='pprog' title='listed items whose line was deleted'>{esc(pt)}</span>"
+                      if pt else "")
+                name = f"<div class='pn'>{esc(p['name'] if p else iid)}{pt}</div>"
                 st, label = ("done", "✓") if got else ("working", "project")
                 if p is None:
                     info = "project is gone from projects.yaml — done"
@@ -586,8 +616,9 @@ def focus_cards(picks):
 
 
 def focus_json(picks, done, history, today):
-    """One focus project card each: the week's outcome, open items by state, due count, project
-    docs, items closed this week (Mon–today) and the latest history of the project's items."""
+    """One focus project card each: the week's outcome, progress of its listed items, last activity,
+    items closed this week (Mon–today), open items by state, due count, project docs and the latest
+    history of the project's items."""
     by_pick = {pk["id"]: pk for pk in picks}
     monday = str(today - dt.timedelta(days=today.weekday()))
     out = []
@@ -597,6 +628,8 @@ def focus_json(picks, done, history, today):
                       key=lambda e: e[0], reverse=True)[:FOCUS_HISTORY]
         out.append({"id": p["id"], "name": p["name"], "area": p["area"], "status": p["status"],
                     "outcome": pk["outcome"], "when": pk["when"], "items": pk["items"],
+                    "prog": ({"done": pk["prog"][0], "open": pk["prog"][1]} if pk.get("prog") else None),
+                    "last": pk.get("last"), "ago": pk.get("ago"),
                     "counts": {s: sum(1 for it in p["items"] if it["state"] == s) for s in STATES},
                     "due": sum(1 for it in p["items"] if it.get("due")),
                     "docs": [[doc_label(d), doc_href(d), str(d)] for d in p["docs"]],
@@ -624,7 +657,7 @@ def board_json(projects, done, history, today, areas, has_git, focus=None):
     lanes += sorted(pid for pid in used if pid not in by_id)
     ids = {it["id"] for _, it in items} | {r["id"] for r in done_rows}
     src = CFG["source"].get("url", "") if isinstance(CFG["source"], dict) else ""
-    return {"version": VERSION, "today": str(today), "wip": CFG["wip"],
+    return {"version": VERSION, "today": str(today), "activeDays": ACTIVE_DAYS,
             "defaultArea": CFG["default_area"], "areas": areas, "git": has_git,
             "historyDays": HISTORY_DAYS,
             "projects": {p["id"]: {"name": p["name"], "area": p["area"], "status": p["status"],
@@ -787,6 +820,7 @@ def main():
     done = recently_done(closed, today)
     focus, focus_problems = resolve_focus(load_focus(repo), projects, items, closed)
     problems += focus_problems
+    focus_progress(focus, items, history, today)
     # The stale warning compares the build time with the viewer's clock, so it is meaningless
     # for a page built with a fixed --today (the demo).
     stale = 0 if a.today else CFG["stale"]
@@ -896,6 +930,7 @@ li.w{color:var(--alert);font-size:12px;padding:2px 0}
 .pick .st{font-size:12px}
 .pick.got .t{text-decoration:line-through;text-decoration-color:var(--muted);color:var(--muted)}
 .pick .pn{font-size:11px;font-weight:600;color:var(--muted)}
+.pick .pprog{margin-left:4px;padding:0 6px;border-radius:999px;background:var(--chip);color:var(--done);font-weight:700;white-space:nowrap}
 .flow svg{display:block;width:100%;height:auto;margin:2px 0 4px;overflow:visible}
 .flow .fo{fill:var(--c-open)} .flow .fc{fill:var(--c-closed)}
 .flow .gl{stroke:var(--line);stroke-width:1}
@@ -936,9 +971,6 @@ li.w{color:var(--alert);font-size:12px;padding:2px 0}
 .h-next i{background:var(--next)} .h-working i{background:var(--working)} .h-blocked i{background:var(--waiting)} .h-done i{background:var(--done)}
 .colh .n{font-weight:500;color:var(--muted);font-variant-numeric:tabular-nums}
 .colh .sub{flex-basis:100%;font-size:11px;font-weight:400;color:var(--muted)}
-.colh.over{background:var(--amber-bg);color:var(--amber-ink);border-radius:8px}
-.colh.over .n{color:inherit;font-weight:700}
-.col.over{border-color:var(--waiting)}
 button.colh{cursor:pointer}
 button.colh:hover{color:var(--done)}
 .col.shut{display:flex;flex-direction:column;align-self:stretch;padding:0}
@@ -966,6 +998,13 @@ button.colh:hover{color:var(--done)}
 .fband .fa{margin-left:auto;font-weight:500}
 .fname{min-width:0;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fcard .ct{-webkit-line-clamp:4}
+.fact{flex:none;margin-left:auto;padding:0 6px;border:1px solid currentColor;border-radius:999px;font-size:10.5px;font-weight:600;white-space:nowrap}
+.fact.on{color:var(--working)} .fact.quiet{color:var(--muted);border-style:dashed}
+.fprog{display:flex;gap:8px;align-items:center;margin-top:7px;font-size:12px;font-weight:600}
+.fbar{flex:1;height:7px;border-radius:4px;background:var(--line);overflow:hidden}
+.fbar i{display:block;height:100%;background:var(--done)}
+.fclosed{margin-top:6px;font-size:12.5px;overflow-wrap:anywhere}
+.fclosed b{color:var(--done)} .fclosed.none{color:var(--muted)} .fclosed.none b{color:inherit;font-weight:500}
 .fcard a{position:relative;z-index:1}
 .fs.next{color:var(--next)} .fs.working{color:var(--working)} .fs.waiting{color:var(--waiting)} .fs.watch{color:var(--watch)}
 .fcard+.card:not(.fcard),.fcard+.empty,.fnext+.card,.fnext+.empty{margin-top:12px}
@@ -973,7 +1012,6 @@ button.colh:hover{color:var(--done)}
 /* Group by project: one lane per project across the columns */
 .board.lanes{gap:0 10px}
 .board.lanes>.colh{border-bottom:2px solid var(--line);border-radius:0;background:var(--bg);padding:8px 2px 6px}
-.board.lanes>.colh.over{background:var(--amber-bg);border-radius:8px 8px 0 0}
 .board.lanes>.colh.shut{min-height:90px;border-bottom:0}
 .lane{grid-column:1/-1;padding:14px 2px 2px;border-bottom:1px solid var(--line);font-size:13px;font-weight:600}
 .lane .lt{position:sticky;left:2px;display:inline-flex;gap:6px;align-items:baseline}
@@ -1135,10 +1173,31 @@ a.gone{text-decoration-style:dotted}
     f.docs.forEach(function(d){var s=m.appendChild(el("span")); s.title=d[2]; s.appendChild(link(d[0],d[1]));});
     return m;
   }
-  function closedLine(f,cls){
-    var m=el("div",cls,"closed this week: ");
-    if(f.closed.length) idLinks(m,f.closed.join(", ")); else m.appendChild(document.createTextNode("none yet"));
+  function closedLine(f,cls){  // the main progress signal: items of the project closed Mon–today
+    var n=f.closed.length, m=el("div",(cls?cls+" ":"")+"fclosed"+(n?"":" none"));
+    m.appendChild(el("b",null,n?"✓ "+n+" closed this week":"none closed this week yet"));
+    if(n) idLinks(m,": "+f.closed.join(", "));
     return m;
+  }
+  function isActive(f){return f.ago!=null&&f.ago<=D.activeDays;}
+  function actChip(f){  // last change to any of the project's item lines, from git history
+    if(!D.git) return null;
+    var on=isActive(f), t=f.ago==null?"quiet":(on?(f.ago===0?"active today":"active "+f.ago+" d ago"):"quiet "+f.ago+" d");
+    var c=el("span","fact "+(on?"on":"quiet"),t);
+    c.title=f.last?"last change to a "+f.id+" item line: "+f.last:"no "+f.id+" item line changed in the last "+D.historyDays+" days";
+    return c;
+  }
+  function progBar(f){  // the pick's (items: …) list: done = the item's line was deleted
+    var p=f.prog, m=p?p.done.length+p.open.length:0;
+    if(!m) return null;
+    var w=el("div","fprog"), b=w.appendChild(el("div","fbar"));
+    b.appendChild(el("i")).style.width=(100*p.done.length/m)+"%";
+    b.setAttribute("role","progressbar"); b.setAttribute("aria-valuemin","0");
+    b.setAttribute("aria-valuemax",String(m)); b.setAttribute("aria-valuenow",String(p.done.length));
+    b.setAttribute("aria-label","listed items done");
+    w.appendChild(el("span",null,p.done.length+" of "+m+" done"));
+    w.title="done: "+(p.done.join(", ")||"none")+" · open: "+(p.open.join(", ")||"none");
+    return w;
   }
   function fcard(f){
     var c=el("div","card fcard"+(S.proj===f.id?" on":"")+(f.status!=="active"?" paused":""));
@@ -1150,12 +1209,14 @@ a.gone{text-decoration-style:dotted}
     var top=c.appendChild(el("div","c1"));
     top.appendChild(el("span","cid",f.id));
     top.appendChild(el("span","fname",f.name)).title=f.name;
+    var a=actChip(f); if(a) top.appendChild(a);
     idLinks(c.appendChild(el("div","ct")),f.outcome);
+    var pb=progBar(f); if(pb) c.appendChild(pb);
+    c.appendChild(closedLine(f,null));
     if(f.when) idLinks(c.appendChild(el("div","c3")),"done when: "+f.when);
     if(f.items.length) idLinks(c.appendChild(el("div","c3 fitems")),"items: "+f.items.join(", "));
     c.appendChild(countsLine(f,"c3"));
     if(f.docs.length) c.appendChild(docLinks(f,"c3"));
-    c.appendChild(closedLine(f,"c3"));
     return c;
   }
   function nextUp(parent){  // "Next up: …" note lines of FOCUS.md, muted, under the focus cards
@@ -1175,14 +1236,11 @@ a.gone{text-decoration-style:dotted}
       return h;
     }
     h.appendChild(el("span",null,c.label));
-    if(c.k==="working"){
-      h.appendChild(el("span","n",total+" / "+D.wip));
-      h.title="Work in progress: "+total+", limit "+D.wip+" (wip_limit in tasker.yaml)";
-      if(total>D.wip) h.classList.add("over");
-      if(list.length<total) h.appendChild(el("span","n","· "+list.length+" shown"));
+    if(c.k==="working"){  // the limit is the focus projects; no item counter
       if(FOC.length){
-        var fp=h.appendChild(el("span","sub",count(fs,FOC.length)+" focus project"+(FOC.length===1?"":"s")+" · not counted in WIP"));
-        fp.title="Project picks from FOCUS.md; the count above is items only";
+        var act=fs.filter(isActive).length;
+        h.appendChild(el("span","n",count(fs,FOC.length)+" focus project"+(FOC.length===1?"":"s")+(D.git?" · "+act+" active":"")));
+        h.title="Project picks from FOCUS.md. Active: one of the project's item lines was added, changed or deleted in the last "+D.activeDays+" days (git history)";
       }
     } else h.appendChild(el("span","n",count(list,total)));
     if(c.k==="blocked"){
@@ -1202,7 +1260,7 @@ a.gone{text-decoration-style:dotted}
     var heads=COLS.map(function(c){return head(c,shown[c.k],total[c.k],fs);});
     if(!S.lanes){
       COLS.forEach(function(c,i){
-        var col=board.appendChild(el("div","col c-"+c.k+(live(c)?"":" shut")+(heads[i].classList.contains("over")?" over":"")));
+        var col=board.appendChild(el("div","col c-"+c.k+(live(c)?"":" shut")));
         col.appendChild(heads[i]);
         if(!live(c)) return;
         if(c.k==="working"&&fs.length){fs.forEach(function(f){col.appendChild(fcard(f));}); nextUp(col);}
@@ -1339,8 +1397,10 @@ a.gone{text-decoration-style:dotted}
     var dl=body.appendChild(el("dl"));
     if(f.when) row(dl,"Done when",idLinks(el("span"),f.when));
     if(f.items.length) row(dl,"Items",idLinks(el("span"),f.items.join(", ")));
-    row(dl,"Open items",countsLine(f,"c3"));
+    var pb=progBar(f); if(pb) row(dl,"Progress",pb);
+    var a=actChip(f); if(a) row(dl,"Activity",a);
     row(dl,"Closed",closedLine(f,null));
+    row(dl,"Open items",countsLine(f,"c3"));
     if(f.status!=="active") row(dl,"Status",f.status);
     if(f.docs.length) row(dl,"Project docs",docLinks(f,"c3"));
     row(dl,"Board",S.proj===f.id?"filtered to "+f.id+" (project menu: All projects to clear)":"not filtered");

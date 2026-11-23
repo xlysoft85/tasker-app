@@ -38,7 +38,7 @@ can come in any order. Indented lines under an item make a short sub-list.
 | State | Meaning | Usually has |
 |-------|---------|-------------|
 | `#next` | You (or an agent) can act on it now | — |
-| `#working` | Someone is on it right now. Keep these few (`wip_limit`) | — |
+| `#working` | Someone is on it right now (optional: progress on the board comes from git history, not from this state) | — |
 | `#waiting` | Waiting on a thing, a person or another item | `on:`, `since:`, `check:` |
 | `#watch` | Done, but verify when a condition holds | `check:` |
 | `#someday` | Wanted, not planned | — |
@@ -59,8 +59,11 @@ top of the dashboard.
 One static `index.html` with its CSS and JavaScript inline: no server, no CDN, no build step.
 
 - **Board.** Columns *Someday* · *Next* · *Working* · *Blocked* · *Done*. *Blocked* holds `#waiting`
-  items and `#watch` items, which carry a **verify** badge. The *Working* header shows
-  `n / wip_limit` and turns amber above the limit. A card shows its ID, project (in its area's
+  items and `#watch` items, which carry a **verify** badge. *Working* holds the focus project cards
+  (see *This week*); its header reads `3 focus projects · 2 active` and is empty without focus
+  projects. There is no item counter: the limit is the focus projects, and their progress is read
+  from git history, never from a state you have to set. `#working` items still show in *Working*,
+  under the project cards. A card shows its ID, project (in its area's
   colour), title, `check:` date and `on:`. Cards that need you now have a red edge and sort first:
   their check date has come, or everything they wait on is done (**unblocked**). Check dates are red
   when due and amber within three days.
@@ -99,13 +102,35 @@ One static `index.html` with its CSS and JavaScript inline: no server, no CDN, n
     *Format problems* box. It shows the project's name and open item count, and counts as done only
     when the project has `status: done` (or is gone from `projects.yaml` after its items closed).
   - Each open project pick also gets a **focus project card** at the top of *Working* (three at
-    most): the week's outcome and *done when*, open items by state, how many are due, links to the
-    project's `docs:` (labelled by file name, linked like `doc:`), and the items of that project
-    closed this week. The cards follow the area chips. Click one to filter the board to that project
-    and open its details with the latest history of its items (also `…/#PLAN`). The *Working*
-    count stays items only; the projects are counted on their own line under it.
+    most). Everything on it that moves is read from the same `git log -p` pass, so nobody has to
+    update a state for the card to show progress:
+    - an **activity chip**: `active today`, `active 1 d ago`, `active 2 d ago`, then `quiet 3 d`
+      and up, from the last commit that added, changed or deleted a line of any of the project's
+      items (any `PLAN-n`, listed or not). `quiet` alone: no such change in the last 90 days.
+      The *Working* header counts the cards that are active (2 days or less).
+    - a **progress bar**, `n of m done`, for the pick's `(items: …)` list (no list, no bar). An item
+      counts as done when its line was deleted (the ID is gone from every file). A listed ID that
+      is neither open nor in the last 90 days of history (a typo, or closed long ago) is left out
+      of `m`.
+    - **closed this week**: how many of the project's items closed Monday–today, with their IDs
+      as links. This is the main progress signal, so it sits right under the bar.
+    - then the outcome's *done when*, the listed items, open items by state, how many are due, and
+      links to the project's `docs:` (labelled by file name, linked like `doc:`).
+
+    The cards follow the area chips. Click one to filter the board to that project and open its
+    details (progress, activity, closed, open items) with the latest history of its items (also
+    `…/#PLAN`). Without a git checkout there is no history, so no activity chip and no bar.
+
+    ```
+    FOCUS PROJECT                                       work
+    PLAN  Q1 planning                       active 1 d ago
+    Q1 goals draft shared with the team
+    ██████░░░░░░░░░░░░  1 of 3 done
+    ✓ 2 closed this week: PLAN-2, PLAN-6
+    ```
   - An outcome may end with `(items: PLAN-1, PLAN-3)`. The list is taken out of the outcome text and
-    shown as item links on the card and in *This week*.
+    shown as item links on the card and in *This week*, where a project pick with a list also shows
+    the same `n of m done`.
   - Lines that are not numbered picks are notes. A note starting `Next up:` also shows as a muted
     line under the focus project cards.
 - **Theme** follows the system. The button in the corner cycles *Auto → Light → Dark*, and each
@@ -195,7 +220,7 @@ git clone --branch v1.5.0 https://github.com/xlysoft85/tasker-app /opt/tasker
 | `refresh_minutes` | `15` | Page auto-reload; `0` turns it off |
 | `stale_minutes` | `0` (off) | Red *stale* bar when the page is older than this — the build has stopped. Set it to about 3× your build interval; leave it off if you build only on push |
 | `default_area` | `all` | Area chip selected on a browser's first visit; after that the browser remembers the last chip |
-| `wip_limit` | `5` | Most `#working` items before the *Working* column turns amber |
+| `wip_limit` | — | Unused since 1.6.0 (it was the *Working* item limit). Allowed and ignored, so an old `tasker.yaml` needs no change |
 | `focus` | `FOCUS.md` | File with the week's picks, shown as *This week* (see above). Missing file → no picks, just the closed-per-week chart |
 | `routines` | `routines.yaml` | File for the Routines view (see above). Missing file → no Routines view |
 | `commit` | git's own identity | `{name, email}` for the `TASKER.md` commits |

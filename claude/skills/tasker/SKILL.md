@@ -24,7 +24,7 @@ Only ID, `#state` and Title are required. Optional fields go in any order, each 
 | State | Use when |
 |-------|----------|
 | `#next` | I (or you) can act on it now |
-| `#working` | Someone is on it right now. Keep these few; the board warns above `wip_limit` |
+| `#working` | Someone is on it right now. Optional: the board shows progress from git history, not from this state |
 | `#waiting` | It waits on a thing, a person or other items. Always give `on:` and a `check:` date; `since:` when known |
 | `#watch` | Done, but needs a check later (`check:` or a condition in the note) |
 | `#someday` | Wanted, not planned |

@@ -5,7 +5,6 @@ source: {name: you/my-tasker, url: https://github.com/you/my-tasker}   # header 
 schedule: rebuilds on every push and daily   # shown in the header
 refresh_minutes: 15                    # page auto-reload; 0 = off
 default_area: all                      # area chip selected on first visit (then the browser remembers)
-wip_limit: 3                           # the Working column turns amber above this
 # routines: routines.yaml              # the Routines view; omit the file to hide the view
 repos:                                 # doc:<repo>/<path> becomes a link
   my-tasker: https://github.com/you/my-tasker
