@@ -13,8 +13,10 @@ git clone https://github.com/xlysoft85/tasker-app ~/src/tasker-app
 mkdir -p ~/.claude/skills && cp -r ~/src/tasker-app/claude/skills/tasker ~/.claude/skills/
 ```
 
-It holds the item format and rules. Claude loads it when a task touches your items, and you can call
-it directly with `/tasker` ("/tasker what's waiting on other people?", "/tasker add: renew the domain by Friday").
+It holds the item format and the conventions (`#next` → done, `then:` on parked items, ticket keys
+from other trackers, the week's `FOCUS.md`). Claude loads it when a task touches your items, and you
+can call it directly with `/tasker` ("/tasker what's waiting on other people?", "/tasker what's this
+week's focus?", "/tasker add: renew the domain by Friday").
 
 ## 2. Your `CLAUDE.md`: make updating a habit
 
@@ -66,12 +68,16 @@ Each new session pulls the repo and starts with a block like this:
 
 ```
 Tasker — needs you now (https://you.github.io/my-tasker/):
-- ONB-2 waiting Laptop for Sam — ordered, delivery expected Thursday — on: IT parcel — check 2026-10-31 (2 d overdue)
-- WEB-6 waiting New header photos from the design agency — on: WEB-2 — unblocked
+- WEB-1 waiting Legal sign-off on the new cookie banner — copy sent on 27 Oct; then: paste the approved text into the CMS and switch the banner on — on: Leg
+- VEND-6 waiting CRM renewal quote — asked for a two-year price; then: compare it with the one-year price and decide before 30 Nov — on: vendor (Alex, accou
+- WEB-11 waiting New header photos from the design agency — they start once they have the brief — on: WEB-10 — unblocked
 ```
 
+The hook cuts each line at 160 characters; the full line is in `TASKER.md`.
+
 The `permissions` entries let Claude pull and edit items without asking each time. Commits and pushes
-still ask, unless you also allow `Bash(git commit:*)` and `Bash(git push:*)`.
+still ask, unless you also allow `Bash(git commit:*)` and `Bash(git push:*)`. If Claude runs your
+weekly review, also allow `Edit(~/my-tasker/FOCUS.md)`; otherwise leave that file to you.
 
 The hook's *Needs you now* comes from `TASKER.md`, which your workflow regenerates after each push.
 Locally edited items show up there once that build has run and the next session pulls.

@@ -17,7 +17,7 @@
   status: active
 
 - name: Friday review
-  description: What closed, what is stuck, which stale items to drop; writes next week's three picks to FOCUS.md
+  description: What closed, what is stuck, which stale items to drop; writes next week's three project picks to FOCUS.md
   schedule: "Fri 16:00"
   runs_on: laptop, scheduled task
   account: personal agent
