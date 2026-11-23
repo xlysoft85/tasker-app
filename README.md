@@ -212,8 +212,9 @@ the page and commits `TASKER.md` back when an item changed. If `tasker.yaml` ren
 routines file, change the workflow's `paths:` to match. To pick up a newer Tasker, change the tag.
 
 > **Private items?** GitHub Pages on a private repo needs a paid plan, and the page is still public
-> unless you're on Enterprise Cloud. If that doesn't suit you, keep the repo private, delete the two
-> Pages steps from the workflow and read `TASKER.md` on GitHub, or run Tasker on your own machine (below).
+> unless you're on Enterprise Cloud. If that doesn't suit you, keep the repo private, delete the
+> `upload-pages-artifact` step and the `deploy` job from the workflow and read `TASKER.md` on GitHub,
+> or run Tasker on your own machine (below).
 
 ## Run it yourself
 
