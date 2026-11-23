@@ -1,0 +1,22 @@
+# Open items of example/ that the demo history adds after the first commit: <days before the
+# demo date> <ID>. Every other open item is in the first commit (60 days back).
+27  VEND-5
+20  MOVE-9
+16  WEB-11
+14  PLAN-5
+14  PLAN-6
+13  PLAN-7
+12  VEND-6
+12  MOVE-10
+9   VEND-7
+8   ONB-6
+7   WEB-14
+7   MOVE-11
+6   VEND-8
+6   TALK-4
+6   TALK-5
+3   ONB-7
+3   CAR-4
+3   CAR-5
+1   WEB-15
+1   PLAN-8

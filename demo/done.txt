@@ -1,10 +1,36 @@
-# Items the demo shows as finished: <days before the demo date> <item line>.
-# demo/history.sh adds them to example/ and deletes each in a commit dated that many days back.
-0 - WEB-2 #next Brief the design agency on header photos — mood board and three reference sites
-1 - ONB-4 #waiting Accounts for Sam (email, Slack, GitHub) · on:IT
-1 - PLAN-2 #next Collect last quarter's numbers from finance
-2 - MOVE-4 #waiting Quote from the moving company · on:Movers Ltd · check:2026-10-30
-3 - CAR-1 #next Book the winter tyre change
-4 - VEND-1 #watch Design tool seats cut from 12 to 8 — check nobody lost access · check:2026-10-29
-5 - TALK-1 #next Submit the talk abstract — deadline 31 October
-6 - WEB-7 #next Pick the staging hosting plan
+# Items the demo shows as finished: <opened> <closed> <item line>, both in days before the demo
+# date. opened "-" = already in the first commit (60 days back). demo/history.sh adds each line
+# on its opened day and deletes it on its closed day, one commit each.
+-   51  - MOVE-2 #next Give notice on the old flat
+51  50  - WEB-6 #next Admin logins for the old CMS and the analytics account
+-   49  - WEB-4 #next Content audit of the old site — what moves, what goes
+50  49  - BLOG-2 #next Renew the blog's domain for another year
+-   47  - TALK-1 #next Pick a topic and a working title
+-   45  - ONB-2 #waiting Start date agreed with Sam · on:Sam
+-   43  - WEB-5 #next Pick a theme for the new CMS
+52  42  - MOVE-4 #next Sign the lease for the new flat
+52  41  - PLAN-3 #next Send the planning survey to the team
+46  40  - CAR-2 #next Fix the rear light
+45  37  - VEND-3 #next Cancel the old video-call plan
+-   37  - CAR-1 #next Car insurance renewal — compare two quotes
+39  32  - MOVE-5 #next Measure the new rooms for the sofa and the wardrobe
+35  28  - WEB-9 #next Fix the broken image links the content audit found
+38  27  - PLAN-4 #next Summarise the survey answers on one page
+32  26  - MOVE-6 #next Order moving boxes
+42  23  - WEB-7 #next Export the old blog posts with their publish dates
+38  22  - VEND-4 #next Ask each team which tools they still use
+36  20  - ONB-4 #next Update the onboarding page in the handbook
+-   15  - PLAN-2 #next Collect last quarter's numbers from finance
+-   15  - MOVE-3 #next Ask three moving companies for a quote
+37  13  - WEB-8 #next Pick the staging hosting plan — two quotes, need SSH access
+17  13  - TALK-3 #next Ask a colleague to review the abstract
+-   9   - VEND-1 #watch Design tool seats cut from 12 to 8 — check nobody lost access · check:2026-10-26
+30  9   - MOVE-7 #waiting Pick a mover or rent a van — two quotes back, one missing · on:movers
+-   8   - VEND-2 #next List every paid tool with its owner and renewal date
+45  6   - TALK-2 #next Write the talk abstract — deadline 31 October
+24  5   - MOVE-8 #next Book the van for 14 November
+22  3   - WEB-10 #next Brief the design agency on header photos — mood board and three reference sites
+22  3   - CAR-3 #next Book the winter tyre change
+13  2   - WEB-12 #next Set up the staging site on the new host
+29  1   - ONB-5 #waiting Accounts for Sam (email, chat, code hosting) · on:IT · check:2026-11-02
+9   0   - WEB-13 #next Move the 12 landing pages to the new templates
